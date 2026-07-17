@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DISPATCH — Daily Intel Briefing</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="scanline" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <div class="masthead__row">
+      <h1 class="wordmark">DISPATCH<span class="wordmark__cursor">_</span></h1>
+      <div class="masthead__meta">
+        <span class="tag" id="statusTag">BOOTING</span>
+        <time class="stamp" id="dateStamp">—</time>
+      </div>
+    </div>
+    <p class="masthead__sub">Offensive-security &amp; intel briefing · auto-compiled daily · single operator</p>
+    <div class="masthead__stats" id="statBar" hidden>
+      <span><b id="featCount">0</b> features</span>
+      <span class="dot">·</span>
+      <span><b id="notableCount">0</b> notable</span>
+      <span class="dot">·</span>
+      <span><b id="catCount">0</b> streams</span>
+      <span class="dot">·</span>
+      <span class="stamp" id="genStamp">—</span>
+    </div>
+  </header>
+
+  <main id="board" class="board" aria-live="polite">
+    <div class="state" id="loadingState">
+      <div class="state__pulse"></div>
+      <p>Fetching briefing…</p>
+    </div>
+  </main>
+
+  <template id="cardTpl">
+    <article class="card">
+      <div class="card__rail"><div class="meter" aria-hidden="true"></div></div>
+      <div class="card__body">
+        <div class="card__head">
+          <span class="card__src"></span>
+          <span class="card__score"></span>
+        </div>
+        <h3 class="card__title"><a target="_blank" rel="noopener noreferrer"></a></h3>
+        <p class="card__why"></p>
+        <ul class="card__bullets"></ul>
+        <a class="card__link" target="_blank" rel="noopener noreferrer">open source ↗</a>
+      </div>
+    </article>
+  </template>
+
+  <footer class="footer">
+    <span id="footerNote">DISPATCH · static dashboard · data via GitHub Gist</span>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
