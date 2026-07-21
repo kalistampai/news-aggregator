@@ -16,6 +16,11 @@ Resilience:
     was exactly this: the editor model 503'd while the gatekeeper model was up).
   - A NON-transient error (bad request, auth failure, unknown model id) is raised
     immediately, without burning retries or fallbacks.
+
+Note on sampling params: Gemini 3.x deprecates temperature/top_p/top_k (ignored on the
+newest models, warned-on for 3.5-flash / 3.1-flash-lite). We deliberately do not send
+them; response_mime_type="application/json" + the schema in each prompt keep output
+well-formed.
 """
 from __future__ import annotations
 import json
@@ -85,11 +90,12 @@ def _config(system_prompt: str, max_tokens: int) -> "types.GenerateContentConfig
             threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
         ),
     ]
+    # No temperature/top_p/top_k: deprecated on Gemini 3.x (ignored on the newest
+    # models). Forced-JSON output + the prompt schema are what guarantee structure.
     return types.GenerateContentConfig(
         system_instruction=system_prompt,
         response_mime_type="application/json",
         max_output_tokens=max_tokens,
-        temperature=0,
         safety_settings=safety_settings,
     )
 
