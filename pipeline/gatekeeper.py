@@ -8,6 +8,7 @@ context limits on busy news days.
 from __future__ import annotations
 import json
 from pathlib import Path
+import time
 
 from llm import GATEKEEPER_MODEL, complete_json
 
@@ -35,8 +36,18 @@ def main() -> None:
               "source": a["source"], "snippet": a["snippet"]} for a in batch],
             ensure_ascii=False,
         )
-        verdicts = complete_json(PROMPT, payload, GATEKEEPER_MODEL, max_tokens=4000)
+        # Increased max_tokens to 8000 to safely accommodate 50 articles
+        verdicts = complete_json(PROMPT, payload, GATEKEEPER_MODEL, max_tokens=8000)
+        
+        # Safeguard: If Gemini wrapped the array in a dict (e.g. {"articles": [...]})
+        if isinstance(verdicts, dict):
+            verdicts = verdicts.get("verdicts") or verdicts.get("articles") or list(verdicts.values())[0] if verdicts else []
+        if not isinstance(verdicts, list):
+            verdicts = []
+
         for v in verdicts:
+            if not isinstance(v, dict):
+                continue
             src = by_id.get(v.get("id"))
             if not src:
                 continue
@@ -45,6 +56,8 @@ def main() -> None:
                            "score": v.get("score", 0),
                            "tier": v.get("tier", "reject"),
                            "gatekeeper_reasoning": v.get("reasoning", "")})
+
+        time.sleep(2)  # Brief delay to prevent bursting free-tier rate limits
 
     features = [a for a in scored if a["tier"] == "feature"]
     notable = [a for a in scored if a["tier"] == "notable"]
