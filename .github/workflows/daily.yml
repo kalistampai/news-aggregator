@@ -2,7 +2,18 @@ name: daily-briefing
 
 on:
   schedule:
-    - cron: "0 13 * * *"    # 13:00 UTC = 06:00 PST / 05:00 PDT (bump to 0 14 * * * for steady 6AM Pacific in summer)
+    # GitHub Actions cron is UTC ONLY and does NOT observe daylight saving.
+    #   12:00 UTC  ==  05:00 PDT (summer, UTC-7)  ==  04:00 PST (winter, UTC-8)
+    # It is currently PDT, so this fires at 5 AM Pacific right now. When DST ends
+    # (early November) this becomes 4 AM; bump to "0 13 * * *" then if you want to
+    # hold 5 AM through winter. No single fixed cron can be 5 AM Pacific year-round.
+    #
+    # NOTE: scheduled runs are best-effort and are frequently delayed 5-30+ minutes
+    # (occasionally hours) at the top of the hour under load. That queue delay — not
+    # a bug in this file — is what pushed the previous 06:00-PDT run to ~08:00. If
+    # punctuality matters more than an exact :00, move a few minutes past the hour,
+    # e.g. "17 12 * * *".
+    - cron: "0 12 * * *"
   workflow_dispatch:          # enables the manual "Run workflow" button
 
 jobs:
@@ -30,4 +41,7 @@ jobs:
           GIST_ID:        ${{ secrets.GIST_ID }}
           GATEKEEPER_MODEL: gemini-3.1-flash-lite
           EDITOR_MODEL:     gemini-3.5-flash
+          # Editor fails over to this model if EDITOR_MODEL returns 503/overload.
+          # Defaults to the gatekeeper model in code; set here so it is visible/tunable.
+          EDITOR_FALLBACK_MODELS: gemini-3.1-flash-lite
         run: python run.py
