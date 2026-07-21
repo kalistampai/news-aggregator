@@ -1,0 +1,70 @@
+# One URL per line. Blank lines and # comments are ignored.
+# Most of these are homepage / blog-index URLs; ingest.py auto-discovers the RSS/Atom
+# feed for each. Sites with no discoverable feed are logged and skipped in the run summary.
+
+# --- News, Technology & Cybersecurity ---
+https://www.bleepingcomputer.com/
+https://www.csoonline.com/
+https://cybersecurity-magazine.com/
+https://www.darkreading.com/
+https://www.darkowl.com/blog-content/
+https://www.hackerone.com/vulnerability-and-security-testing-blog/
+https://www.hackingarticles.in/
+https://www.hackread.com/
+https://hackaday.com/
+https://hakin9.org/blog-2/
+https://krebsonsecurity.com/
+https://www.malwarebytes.com/blog/
+https://www.pentestpartners.com/security-blog/
+https://www.pwndefend.com/blog/
+https://securityaffairs.co/wordpress/
+https://www.stationx.net/blog/
+https://www.welivesecurity.com/
+https://www.zscaler.com/blogs/security-research/
+https://cocomelonc.github.io/
+https://jonnyzzz.com/
+https://thomascountz.com/
+https://www.trickster.dev/
+https://therecord.media/
+https://www.semianalysis.com/
+https://www.engadget.com/
+https://www.techcrunch.com/
+https://www.wired.com/
+https://www.theintercept.com/
+https://themarkup.org/
+https://www.propublica.org/
+https://www.motherjones.com/
+https://www.vox.com/
+https://www.dropsitenews.com/
+https://americanfreepress.net/
+https://www.stealthmole.com/resources/intelligence-hub
+
+# --- AI / ML research ---
+https://www.emergentmind.com/papers/
+https://paperswithcode.com/
+https://thegradient.pub/
+https://www.therundown.ai/
+https://www.mlyearning.org/
+
+# --- Aggregators (HN handled specially in ingest.py) ---
+https://news.ycombinator.com/
+
+# --- Blogs & Communities ---
+https://darknetlive.com/
+https://ddosecrets.com/
+https://www.eff.org/
+https://fmhy.net/posts/
+https://www.metaculus.com/home/
+https://off-guardian.org/category/this-week-in-the-new-normal/
+https://www.phonearena.com/
+https://www.privacyinternational.org/
+https://www.producthunt.com/
+https://pursuitmag.com/
+https://www.sciencedaily.com/
+https://www.social-engineer.org/social-engineering/
+https://www.thelastamericanvagabond.com/
+https://unlimitedhangout.com/
+https://forbiddenknowledgetv.net/
+https://www.reddit.com/r/privacy/
+https://www.reddit.com/r/Piracy/
+https://www.reddit.com/r/FREEMEDIAHECKYEAH/
