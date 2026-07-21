@@ -6,7 +6,7 @@ const CONFIG = {
   // Preferred: the Gist API endpoint. Always returns the latest revision and sends
   // CORS headers. Unauthenticated requests are rate-limited to 60/hr per IP — fine
   // for one reader. Put your Gist ID here.
-  GIST_ID: "https://gist.github.com/kalistampai/368b2174f9c6e7a09df1eae9d814940f",
+  GIST_ID: "368b2174f9c6e7a09df1eae9d814940f",
   FILENAME: "briefing.json",
 
   // Fallback: a raw Gist URL WITHOUT the commit hash (…/raw/briefing.json) always
