@@ -57,7 +57,10 @@ def discover_feed(url: str) -> str | None:
     # Special cases
     host = urlparse(url).netloc
     if "reddit.com" in host:
-        return url.rstrip("/") + "/.rss"
+        # feeds.txt entries may or may not already end in /.rss — don't double-append
+        # (that produced .../.rss/.rss, which returned 0 items).
+        u = url.rstrip("/")
+        return u if u.endswith("/.rss") else u + "/.rss"
     if "news.ycombinator.com" in host:
         return "https://news.ycombinator.com/rss"
 
