@@ -25,24 +25,22 @@ _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
 def _extract_json(text: str | None):
-    """Parse model output as JSON, slicing out extra trailing prose or duplicate blocks."""
+    """Parse the first valid JSON object or array from the output, ignoring trailing extra data."""
     if not text:
         raise ValueError("Model returned None or empty text.")
-    
+
     text = _FENCE.sub("", text).strip()
-    
-    # Locate the start and end of the primary JSON structure
+
+    # Find where the JSON payload actually begins ([ for lists, { for dicts)
     start = min([i for i in (text.find("["), text.find("{")) if i != -1], default=-1)
     if start == -1:
         raise ValueError("No JSON structure found in model output.")
-    
-    end = max(text.rfind("]"), text.rfind("}"))
-    if end == -1 or end < start:
-        raise ValueError("Malformed JSON boundaries in model output.")
-        
-    # Extract only the valid JSON slice, ignoring any trailing 'extra data'
-    json_str = text[start:end + 1]
-    return json.loads(json_str)
+
+    # raw_decode parses exactly ONE valid JSON object starting at `start`
+    # and stops as soon as that object ends, completely ignoring trailing text/JSON blocks.
+    decoder = json.JSONDecoder()
+    obj, _ = decoder.raw_decode(text, idx=start)
+    return obj
 
 
 def complete_json(system_prompt: str, user_payload: str, model: str,
