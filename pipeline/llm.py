@@ -21,8 +21,6 @@ from google.genai import types
 
 # Free-tier models (no billing). Flash-Lite = cheapest / highest throughput ->
 # the high-volume gatekeeper; Flash = stronger synthesis -> the editor.
-# Mirrors the original Haiku/Sonnet split. Override via the workflow env block
-# (e.g. bump to a gemini-3.x Flash once you confirm its exact id in AI Studio).
 GATEKEEPER_MODEL = os.environ.get("GATEKEEPER_MODEL", "gemini-2.5-flash-lite")
 EDITOR_MODEL = os.environ.get("EDITOR_MODEL", "gemini-2.5-flash")
 
@@ -32,8 +30,10 @@ MAX_RETRIES = 5
 BACKOFF_BASE = 4  # seconds -> 4, 8, 16, 32 between retries
 
 
-def _extract_json(text: str):
-    """Parse model output as JSON, tolerating an accidental ```json fence."""
+def _extract_json(text: str | None):
+    """Parse model output as JSON, tolerating an accidental ```json fence or None text."""
+    if not text:
+        raise ValueError("Model returned None or empty text (likely blocked by safety filters or recitation checks).")
     t = text.strip()
     if t.startswith("```"):
         t = t.strip("`").lstrip()
@@ -50,11 +50,24 @@ def complete_json(system_prompt: str, user_payload: str, model: str,
     Retries transient / rate-limit errors with exponential backoff, since the
     free tier enforces per-minute request caps.
     """
+    # Lower safety thresholds to prevent false positives on offensive security/CVE topics
+    safety_settings = [
+        types.SafetySetting(
+            category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+            threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        ),
+        types.SafetySetting(
+            category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+            threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        ),
+    ]
+
     config = types.GenerateContentConfig(
         system_instruction=system_prompt,
         response_mime_type="application/json",  # enforce clean JSON, no fences
         max_output_tokens=max_tokens,
         temperature=0,                          # deterministic scoring/synthesis
+        safety_settings=safety_settings,
     )
 
     last_err = None
@@ -67,9 +80,11 @@ def complete_json(system_prompt: str, user_payload: str, model: str,
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             msg = str(exc).lower()
+            # Added "none", "empty", and "blocked" so safety filter hits trigger a retry
             transient = any(s in msg for s in (
                 "429", "resource_exhausted", "rate", "quota",
                 "503", "unavailable", "500", "internal", "timeout",
+                "none", "empty", "blocked", "safety",
             ))
             if attempt < MAX_RETRIES - 1 and transient:
                 time.sleep(BACKOFF_BASE * (2 ** attempt))
