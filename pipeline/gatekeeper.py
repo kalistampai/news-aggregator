@@ -38,10 +38,13 @@ def main() -> None:
         )
         # Increased max_tokens to 8000 to safely accommodate 50 articles
         verdicts = complete_json(PROMPT, payload, GATEKEEPER_MODEL, max_tokens=8000)
-        
-        # Safeguard: If Gemini wrapped the array in a dict (e.g. {"articles": [...]})
+
+        # Safeguard: the model occasionally wraps the array in a dict
+        # (e.g. {"verdicts": [...]} or {"articles": [...]}); unwrap it, then fall
+        # back to the first value for any other single-key wrapper.
         if isinstance(verdicts, dict):
-            verdicts = verdicts.get("verdicts") or verdicts.get("articles") or list(verdicts.values())[0] if verdicts else []
+            verdicts = (verdicts.get("verdicts") or verdicts.get("articles")
+                        or next(iter(verdicts.values()), []))
         if not isinstance(verdicts, list):
             verdicts = []
 
