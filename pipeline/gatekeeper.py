@@ -16,7 +16,7 @@ IN_FILE = HERE / "raw_articles.json"
 OUT_FILE = HERE / "scored_articles.json"
 PROMPT = (HERE / "prompts" / "gatekeeper.txt").read_text()
 
-BATCH_SIZE = 20   # articles per LLM call
+BATCH_SIZE = 50   # articles per LLM call
 
 
 def _batched(seq, n):
