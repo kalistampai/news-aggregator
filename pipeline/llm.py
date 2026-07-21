@@ -44,7 +44,7 @@ def _extract_json(text: str | None):
 
 
 def complete_json(system_prompt: str, user_payload: str, model: str,
-                  max_tokens: int = 4000):
+                  max_tokens: int = 8000):
     """Call Gemini with forced-JSON output and return the parsed object."""
     safety_settings = [
         types.SafetySetting(
@@ -75,11 +75,17 @@ def complete_json(system_prompt: str, user_payload: str, model: str,
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             msg = str(exc).lower()
-            transient = any(s in msg for s in (
-                "429", "resource_exhausted", "rate", "quota",
-                "503", "unavailable", "500", "internal", "timeout",
-                "none", "empty", "blocked", "safety", "extra data",
-            ))
+            
+            # Treat ANY JSON syntax error, truncation, or network/quota restriction as transient
+            transient = (
+                isinstance(exc, (json.JSONDecodeError, ValueError)) or
+                any(s in msg for s in (
+                    "429", "resource_exhausted", "rate", "quota",
+                    "503", "unavailable", "500", "internal", "timeout",
+                    "none", "empty", "blocked", "safety", "extra data",
+                    "unterminated", "expecting", "decode", "json",
+                ))
+            )
             if attempt < MAX_RETRIES - 1 and transient:
                 time.sleep(BACKOFF_BASE * (2 ** attempt))
                 continue
