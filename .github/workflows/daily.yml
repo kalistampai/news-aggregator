@@ -28,6 +28,6 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GH_GIST_TOKEN:  ${{ secrets.GH_GIST_TOKEN }}
           GIST_ID:        ${{ secrets.GIST_ID }}
-          GATEKEEPER_MODEL: gemini-2.5-flash-lite
+          GATEKEEPER_MODEL: gemini-2.5-flash
           EDITOR_MODEL:     gemini-2.5-flash
         run: python run.py
