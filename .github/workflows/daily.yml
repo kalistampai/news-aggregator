@@ -2,19 +2,19 @@ name: daily-briefing
 
 on:
   schedule:
-    # GitHub Actions cron is UTC ONLY and does NOT observe daylight saving.
-    #   12:00 UTC  ==  05:00 PDT (summer, UTC-7)  ==  04:00 PST (winter, UTC-8)
-    # It is currently PDT, so this fires at 5 AM Pacific right now. When DST ends
-    # (early November) this becomes 4 AM; bump to "0 13 * * *" then if you want to
-    # hold 5 AM through winter. No single fixed cron can be 5 AM Pacific year-round.
-    #
-    # NOTE: scheduled runs are best-effort and are frequently delayed 5-30+ minutes
-    # (occasionally hours) at the top of the hour under load. That queue delay — not
-    # a bug in this file — is what pushed the previous 06:00-PDT run to ~08:00. If
-    # punctuality matters more than an exact :00, move a few minutes past the hour,
-    # e.g. "17 12 * * *".
-    - cron: "0 12 * * *"
+    # Runs at 5 AM Pacific YEAR-ROUND. The `timezone:` field (GitHub Actions,
+    # rolled out March 2026) makes cron DST-aware, so the old UTC offset math is
+    # gone. If your instance ever ignores `timezone:` (e.g. older GHES), delete
+    # that line and use the UTC fallback:  - cron: "0 12 * * *"  (= 05:00 PDT /
+    # 04:00 PST). Either way, scheduled runs are best-effort and can be delayed
+    # 5-30+ min (occasionally longer) at the top of the hour under load — use
+    # "7 5 * * *" to dodge the worst of the :00 queue.
+    - cron: "0 5 * * *"
+      timezone: "America/Los_Angeles"
   workflow_dispatch:          # enables the manual "Run workflow" button
+
+permissions:
+  contents: write             # only for the keepalive commit (final step)
 
 jobs:
   briefing:
@@ -42,6 +42,33 @@ jobs:
           GATEKEEPER_MODEL: gemini-3.1-flash-lite
           EDITOR_MODEL:     gemini-3.5-flash
           # Editor fails over to this model if EDITOR_MODEL returns 503/overload.
-          # Defaults to the gatekeeper model in code; set here so it is visible/tunable.
           EDITOR_FALLBACK_MODELS: gemini-3.1-flash-lite
         run: python run.py
+
+      # -------------------------------------------------------------------------
+      # KEEPALIVE — the single thing most likely to silently kill this project.
+      # GitHub auto-disables a scheduled workflow after 60 days with no commit on
+      # the default branch. This pipeline writes only to a Gist (outputs are
+      # .gitignored), so the repo never receives commits from normal operation and
+      # the cron would stop ~day 60. This step commits a tiny heartbeat once the
+      # branch has been quiet for 50+ days, resetting the clock. It runs even if
+      # the pipeline failed (always()), so a bad run can't let the schedule lapse.
+      # If the workflow is ever disabled despite this, GITHUB_TOKEN commits weren't
+      # counted for your repo — replace the push auth with a PAT that has `repo`.
+      - name: Keepalive (avoid 60-day cron auto-disable)
+        if: ${{ always() && github.event_name == 'schedule' }}
+        run: |
+          last=$(git log -1 --format=%ct 2>/dev/null || echo 0)
+          now=$(date +%s)
+          age=$(( (now - last) / 86400 ))
+          if [ "$last" -eq 0 ] || [ "$age" -ge 50 ]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            mkdir -p .github
+            date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/.keepalive
+            git add .github/.keepalive
+            git commit -m "chore: keepalive [skip ci]" || exit 0
+            git push
+          else
+            echo "Default branch last touched ${age}d ago; no keepalive needed."
+          fi
