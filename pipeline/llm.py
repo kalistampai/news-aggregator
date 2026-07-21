@@ -4,23 +4,16 @@ Shared LLM client — Google Gemini free-tier drop-in.
 Exposes exactly the interface the pipeline expects:
   - GATEKEEPER_MODEL / EDITOR_MODEL   (model-id constants, overridable via env)
   - complete_json(system_prompt, user_payload, model, max_tokens) -> parsed JSON
-
-Only gatekeeper.py and editor.py import this module, and they use just those
-three symbols, so this is a straight replacement for the Anthropic version.
-
-Auth: reads GEMINI_API_KEY from the environment (set as a GitHub Actions secret).
-Get a free key at https://aistudio.google.com/apikey — no billing required.
 """
 from __future__ import annotations
 import json
 import os
+import re
 import time
 
 from google import genai
 from google.genai import types
 
-# Free-tier models (no billing). Flash-Lite = cheapest / highest throughput ->
-# the high-volume gatekeeper; Flash = stronger synthesis -> the editor.
 GATEKEEPER_MODEL = os.environ.get("GATEKEEPER_MODEL", "gemini-2.5-flash-lite")
 EDITOR_MODEL = os.environ.get("EDITOR_MODEL", "gemini-2.5-flash")
 
@@ -28,29 +21,33 @@ _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 MAX_RETRIES = 5
 BACKOFF_BASE = 4  # seconds -> 4, 8, 16, 32 between retries
+_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
 def _extract_json(text: str | None):
-    """Parse model output as JSON, tolerating an accidental ```json fence or None text."""
+    """Parse model output as JSON, slicing out extra trailing prose or duplicate blocks."""
     if not text:
-        raise ValueError("Model returned None or empty text (likely blocked by safety filters or recitation checks).")
-    t = text.strip()
-    if t.startswith("```"):
-        t = t.strip("`").lstrip()
-        if t[:4].lower() == "json":
-            t = t[4:]
-    return json.loads(t.strip())
+        raise ValueError("Model returned None or empty text.")
+    
+    text = _FENCE.sub("", text).strip()
+    
+    # Locate the start and end of the primary JSON structure
+    start = min([i for i in (text.find("["), text.find("{")) if i != -1], default=-1)
+    if start == -1:
+        raise ValueError("No JSON structure found in model output.")
+    
+    end = max(text.rfind("]"), text.rfind("}"))
+    if end == -1 or end < start:
+        raise ValueError("Malformed JSON boundaries in model output.")
+        
+    # Extract only the valid JSON slice, ignoring any trailing 'extra data'
+    json_str = text[start:end + 1]
+    return json.loads(json_str)
 
 
 def complete_json(system_prompt: str, user_payload: str, model: str,
                   max_tokens: int = 4000):
-    """Call Gemini with forced-JSON output and return the parsed object.
-
-    Returns whatever the model emits — a list (gatekeeper) or a dict (editor).
-    Retries transient / rate-limit errors with exponential backoff, since the
-    free tier enforces per-minute request caps.
-    """
-    # Lower safety thresholds to prevent false positives on offensive security/CVE topics
+    """Call Gemini with forced-JSON output and return the parsed object."""
     safety_settings = [
         types.SafetySetting(
             category=types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
@@ -64,9 +61,9 @@ def complete_json(system_prompt: str, user_payload: str, model: str,
 
     config = types.GenerateContentConfig(
         system_instruction=system_prompt,
-        response_mime_type="application/json",  # enforce clean JSON, no fences
+        response_mime_type="application/json",
         max_output_tokens=max_tokens,
-        temperature=0,                          # deterministic scoring/synthesis
+        temperature=0,
         safety_settings=safety_settings,
     )
 
@@ -80,11 +77,10 @@ def complete_json(system_prompt: str, user_payload: str, model: str,
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             msg = str(exc).lower()
-            # Added "none", "empty", and "blocked" so safety filter hits trigger a retry
             transient = any(s in msg for s in (
                 "429", "resource_exhausted", "rate", "quota",
                 "503", "unavailable", "500", "internal", "timeout",
-                "none", "empty", "blocked", "safety",
+                "none", "empty", "blocked", "safety", "extra data",
             ))
             if attempt < MAX_RETRIES - 1 and transient:
                 time.sleep(BACKOFF_BASE * (2 ** attempt))
