@@ -2,37 +2,31 @@ name: daily-briefing
 
 on:
   schedule:
-    # 06:00 America/Los_Angeles. GitHub cron is UTC and does NOT observe DST,
-    # so this is 13:00 UTC (PST offset). Adjust to 12:00 UTC during PDT if you care.
-    - cron: "0 13 * * *"
-  workflow_dispatch: {}   # manual "Run workflow" button
-
-concurrency:
-  group: briefing
-  cancel-in-progress: false
+    - cron: "0 13 * * *"    # 13:00 UTC = 06:00 PST / 05:00 PDT (bump to 0 14 * * * for steady 6AM Pacific in summer)
+  workflow_dispatch:          # enables the manual "Run workflow" button
 
 jobs:
   briefing:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
 
-      - name: Install deps
-        run: pip install -r pipeline/requirements.txt
+      - name: Install dependencies
+        working-directory: pipeline
+        run: pip install -r requirements.txt
 
       - name: Run pipeline
         working-directory: pipeline
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GH_GIST_TOKEN:     ${{ secrets.GH_GIST_TOKEN }}
-          GIST_ID:           ${{ secrets.GIST_ID }}
-          # Optional overrides:
-          # GATEKEEPER_MODEL: claude-haiku-4-5-20251001
-          # EDITOR_MODEL:     claude-sonnet-5
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GH_GIST_TOKEN:  ${{ secrets.GH_GIST_TOKEN }}
+          GIST_ID:        ${{ secrets.GIST_ID }}
+          GATEKEEPER_MODEL: gemini-2.5-flash-lite
+          EDITOR_MODEL:     gemini-2.5-flash
         run: python run.py
