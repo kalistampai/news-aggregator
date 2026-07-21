@@ -14,8 +14,8 @@ import time
 from google import genai
 from google.genai import types
 
-GATEKEEPER_MODEL = os.environ.get("GATEKEEPER_MODEL", "gemini-2.5-flash-lite")
-EDITOR_MODEL = os.environ.get("EDITOR_MODEL", "gemini-2.5-flash")
+GATEKEEPER_MODEL = os.environ.get("GATEKEEPER_MODEL", "gemini-3.1-flash-lite")
+EDITOR_MODEL = os.environ.get("EDITOR_MODEL", "gemini-3.5-flash")
 
 _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
