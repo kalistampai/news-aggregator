@@ -1,51 +1,78 @@
 """
-Thin Anthropic client wrapper shared by the gatekeeper and editor stages.
-Handles the API call, strips accidental markdown fences, and parses JSON with
-one automatic retry (models occasionally add stray prose despite instructions).
+Shared LLM client — Google Gemini free-tier drop-in.
+
+Exposes exactly the interface the pipeline expects:
+  - GATEKEEPER_MODEL / EDITOR_MODEL   (model-id constants, overridable via env)
+  - complete_json(system_prompt, user_payload, model, max_tokens) -> parsed JSON
+
+Only gatekeeper.py and editor.py import this module, and they use just those
+three symbols, so this is a straight replacement for the Anthropic version.
+
+Auth: reads GEMINI_API_KEY from the environment (set as a GitHub Actions secret).
+Get a free key at https://aistudio.google.com/apikey — no billing required.
 """
 from __future__ import annotations
 import json
 import os
-import re
 import time
 
-from anthropic import Anthropic
+from google import genai
+from google.genai import types
 
-_client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+# Free-tier models (no billing). Flash-Lite = cheapest / highest throughput ->
+# the high-volume gatekeeper; Flash = stronger synthesis -> the editor.
+# Mirrors the original Haiku/Sonnet split. Override via the workflow env block
+# (e.g. bump to a gemini-3.x Flash once you confirm its exact id in AI Studio).
+GATEKEEPER_MODEL = os.environ.get("GATEKEEPER_MODEL", "gemini-2.5-flash-lite")
+EDITOR_MODEL = os.environ.get("EDITOR_MODEL", "gemini-2.5-flash")
 
-# Fast + cheap for the gatekeeper; stronger reasoning for the editor.
-GATEKEEPER_MODEL = os.environ.get("GATEKEEPER_MODEL", "claude-haiku-4-5-20251001")
-EDITOR_MODEL = os.environ.get("EDITOR_MODEL", "claude-sonnet-5")
+_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+MAX_RETRIES = 5
+BACKOFF_BASE = 4  # seconds -> 4, 8, 16, 32 between retries
 
 
 def _extract_json(text: str):
-    text = _FENCE.sub("", text).strip()
-    # Grab the outermost JSON array or object if the model wrapped it in prose.
-    start = min([i for i in (text.find("["), text.find("{")) if i != -1], default=-1)
-    if start == -1:
-        raise ValueError("no JSON found in model output")
-    end = max(text.rfind("]"), text.rfind("}"))
-    return json.loads(text[start:end + 1])
+    """Parse model output as JSON, tolerating an accidental ```json fence."""
+    t = text.strip()
+    if t.startswith("```"):
+        t = t.strip("`").lstrip()
+        if t[:4].lower() == "json":
+            t = t[4:]
+    return json.loads(t.strip())
 
 
-def complete_json(system: str, user_payload: str, model: str,
-                  max_tokens: int = 8000, retries: int = 1):
-    """Call the model, expect JSON, return the parsed object."""
-    attempt = 0
-    while True:
-        resp = _client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            messages=[{"role": "user", "content": user_payload}],
-        )
-        raw = "".join(b.text for b in resp.content if b.type == "text")
+def complete_json(system_prompt: str, user_payload: str, model: str,
+                  max_tokens: int = 4000):
+    """Call Gemini with forced-JSON output and return the parsed object.
+
+    Returns whatever the model emits — a list (gatekeeper) or a dict (editor).
+    Retries transient / rate-limit errors with exponential backoff, since the
+    free tier enforces per-minute request caps.
+    """
+    config = types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        response_mime_type="application/json",  # enforce clean JSON, no fences
+        max_output_tokens=max_tokens,
+        temperature=0,                          # deterministic scoring/synthesis
+    )
+
+    last_err = None
+    for attempt in range(MAX_RETRIES):
         try:
-            return _extract_json(raw)
-        except (ValueError, json.JSONDecodeError):
-            if attempt >= retries:
-                raise
-            attempt += 1
-            time.sleep(2)
+            resp = _client.models.generate_content(
+                model=model, contents=user_payload, config=config,
+            )
+            return _extract_json(resp.text)
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            msg = str(exc).lower()
+            transient = any(s in msg for s in (
+                "429", "resource_exhausted", "rate", "quota",
+                "503", "unavailable", "500", "internal", "timeout",
+            ))
+            if attempt < MAX_RETRIES - 1 and transient:
+                time.sleep(BACKOFF_BASE * (2 ** attempt))
+                continue
+            raise
+    raise last_err  # pragma: no cover
