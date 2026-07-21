@@ -31,7 +31,7 @@ OUT_FILE = HERE / "raw_articles.json"
 LOOKBACK_HOURS = 24
 MAX_PER_FEED = 25          # cap entries pulled from any single feed
 SNIPPET_CHARS = 600        # trim long bodies before they hit the LLM
-REQUEST_TIMEOUT = 20
+REQUEST_TIMEOUT = 8
 USER_AGENT = "Mozilla/5.0 (compatible; BriefingBot/1.0; +https://github.com/)"
 
 # Common feed paths tried during auto-discovery, in order.
