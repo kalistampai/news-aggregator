@@ -31,7 +31,7 @@ https://therecord.media/feed
 https://www.engadget.com/rss.xml
 https://techcrunch.com/feed/
 https://www.wired.com/feed/rss
-https://theintercept.com/feed/
+https://theintercept.com/feed
 https://www.propublica.org/feeds/propublica/main
 https://www.motherjones.com/feed/
 https://www.vox.com/rss/index.xml
@@ -68,6 +68,34 @@ https://forbiddenknowledgetv.net/feed/
 https://www.reddit.com/r/privacy/.rss
 https://www.reddit.com/r/Piracy/.rss
 https://www.reddit.com/r/FREEMEDIAHECKYEAH/.rss
+
+# --- World News ---
+https://www.mintpressnews.com/feed/
+https://apnews.com/hub/ap-top-news
+https://feeds.bbci.co.uk/news/rss.xml
+https://www.aljazeera.com/xml/rss/all.xml
+https://www.theguardian.com/world/rss
+https://www.reuters.com/world
+https://nypost.com/feed
+
+# --- Mainstream & Finance ---
+https://finance.yahoo.com/news/rssindex
+
+# --- Personal Picks ---
+https://unlimitedhangout.com/feed/
+https://jasmi.news/
+https://dankornas.substack.com/feed
+https://www.thefp.com/
+https://www.404media.co/rss/
+
+# --- Additional World News & Investigative ---
+https://www.propublica.org/
+https://theintercept.com/
+https://ground.news/
+https://www.schneier.com/feed/
+https://www.twz.com/feed
+https://www.bellingcat.com/feed/
+https://www.occrp.org/en
 
 # --- Removed: no discoverable RSS (JS-only SPAs / feedless). Uncomment only if you
 #     add the tier-4 HTML-scrape fallback; otherwise they just burn discovery time. ---
