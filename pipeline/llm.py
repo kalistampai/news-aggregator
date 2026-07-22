@@ -7,26 +7,31 @@ Exposes exactly the interface the pipeline expects:
         -> parsed JSON
 
 Resilience:
-  - Per-model exponential backoff WITH JITTER, so a short 5xx/429 spike is ridden out
-    rather than propagated.
+  - GLOBAL RATE LIMIT. Every call passes through one process-wide throttle that
+    enforces a minimum gap between requests (LLM_MIN_INTERVAL, default 5s => a
+    hard ceiling of 12 RPM). This is what guarantees the free-tier RPM limit is
+    never crossed, regardless of which stage is calling or how many batches
+    there are — strictly better than scattering time.sleep() through each stage,
+    because retries and failovers are counted too.
+  - Per-model exponential backoff WITH JITTER, so a short 5xx/429 spike is ridden
+    out rather than propagated.
   - Optional `fallback_models`: if the primary model stays transiently unavailable
-    (503 / overload / quota / timeout) after all retries, the SAME request is retried
-    on the next model in the list. This is what turns a single-model outage from a
-    full-pipeline abort into a non-event (the failure that broke the 2026-07-21 run
-    was exactly this: the editor model 503'd while the gatekeeper model was up).
+    (503 / overload / quota / timeout) after all retries, the SAME request is
+    retried on the next model in the list. This is what turns a single-model
+    outage from a full-pipeline abort into a non-event.
   - A NON-transient error (bad request, auth failure, unknown model id) is raised
     immediately, without burning retries or fallbacks.
 
-Note on sampling params: Gemini 3.x deprecates temperature/top_p/top_k (ignored on the
-newest models, warned-on for 3.5-flash / 3.1-flash-lite). We deliberately do not send
-them; response_mime_type="application/json" + the schema in each prompt keep output
-well-formed.
+Note on sampling params: Gemini 3.x deprecates temperature/top_p/top_k (ignored on
+the newest models). We deliberately do not send them; response_mime_type
+"application/json" + the schema in each prompt keep output well-formed.
 """
 from __future__ import annotations
 import json
 import os
 import random
 import re
+import threading
 import time
 
 from google import genai
@@ -38,9 +43,39 @@ EDITOR_MODEL = os.environ.get("EDITOR_MODEL", "gemini-3.5-flash")
 _client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
 MAX_RETRIES = 6      # attempts per model
-BACKOFF_BASE = 4     # seconds -> 4, 8, 16, 32, 60(capped) between retries, plus jitter
+BACKOFF_BASE = 4     # seconds -> 4, 8, 16, 32, 60(capped) between retries, + jitter
 BACKOFF_CAP = 60     # never sleep longer than this between attempts
 _FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+# ---- global throttle --------------------------------------------------------
+# Minimum seconds between ANY two Gemini calls in this process.
+#   5s  -> 12 RPM  (safe under the 15 RPM free-tier Flash ceiling)
+#   4s  -> 15 RPM  (at the ceiling; not recommended)
+#   0   -> disabled
+LLM_MIN_INTERVAL = float(os.environ.get("LLM_MIN_INTERVAL", "5"))
+_throttle_lock = threading.Lock()
+_last_call_at = 0.0
+_call_count = 0
+
+
+def _throttle() -> None:
+    """Block until at least LLM_MIN_INTERVAL has elapsed since the last call."""
+    global _last_call_at, _call_count
+    if LLM_MIN_INTERVAL <= 0:
+        return
+    with _throttle_lock:
+        now = time.monotonic()
+        wait = (_last_call_at + LLM_MIN_INTERVAL) - now
+        if wait > 0:
+            time.sleep(wait)
+        _last_call_at = time.monotonic()
+        _call_count += 1
+
+
+def call_count() -> int:
+    """Total Gemini requests issued this process (including retries)."""
+    return _call_count
+
 
 # Substrings marking an error as retryable / worth failing over to another model.
 _TRANSIENT_MARKERS = (
@@ -53,19 +88,16 @@ _TRANSIENT_MARKERS = (
 
 
 def _extract_json(text: str | None):
-    """Parse the first valid JSON object or array from the output, ignoring trailing extra data."""
+    """Parse the first valid JSON object/array, ignoring trailing extra data."""
     if not text:
         raise ValueError("Model returned None or empty text.")
 
     text = _FENCE.sub("", text).strip()
 
-    # Find where the JSON payload actually begins ([ for lists, { for dicts).
     start = min([i for i in (text.find("["), text.find("{")) if i != -1], default=-1)
     if start == -1:
         raise ValueError("No JSON structure found in model output.")
 
-    # raw_decode parses exactly ONE valid JSON value starting at `start` and stops as
-    # soon as it ends, ignoring any trailing text/JSON blocks.
     decoder = json.JSONDecoder()
     obj, _ = decoder.raw_decode(text, idx=start)
     return obj
@@ -90,8 +122,7 @@ def _config(system_prompt: str, max_tokens: int) -> "types.GenerateContentConfig
             threshold=types.HarmBlockThreshold.BLOCK_ONLY_HIGH,
         ),
     ]
-    # No temperature/top_p/top_k: deprecated on Gemini 3.x (ignored on the newest
-    # models). Forced-JSON output + the prompt schema are what guarantee structure.
+    # No temperature/top_p/top_k: deprecated on Gemini 3.x.
     return types.GenerateContentConfig(
         system_instruction=system_prompt,
         response_mime_type="application/json",
@@ -102,11 +133,12 @@ def _config(system_prompt: str, max_tokens: int) -> "types.GenerateContentConfig
 
 def _complete_one_model(system_prompt: str, user_payload: str, model: str,
                         max_tokens: int):
-    """Call ONE model with forced-JSON output, retrying transient failures. Raises on exhaustion."""
+    """Call ONE model with forced-JSON output, retrying transient failures."""
     config = _config(system_prompt, max_tokens)
     last_err: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
+            _throttle()
             resp = _client.models.generate_content(
                 model=model, contents=user_payload, config=config,
             )
