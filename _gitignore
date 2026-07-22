@@ -1,0 +1,7 @@
+pipeline/raw_articles.json
+pipeline/scored_articles.json
+pipeline/briefing.json
+pipeline/feed_report.json
+pipeline/feed_report.md
+__pycache__/
+*.pyc
