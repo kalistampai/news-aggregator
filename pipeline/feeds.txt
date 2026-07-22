@@ -1,16 +1,16 @@
-Here is your complete, updated `feeds.txt` file with all 125 cybersecurity feeds organized into your existing structure, avoiding duplicates, and merging redundant news categories down to streamline the list.
-
-```text
-# One URL per line. Blank lines and # comments are ignored.
+# DISPATCH feed list — one URL per line. Blank lines and # comments are ignored.
+# Inline comments are also stripped, so "https://x.com/feed  # note" is valid.
 #
-# These are now DIRECT feed URLs (not homepages), so ingest.py's discovery matches
-# on the first parse and never runs the slow brute-force path. That's the main fix
-# for the long ingest — pair it with REQUEST_TIMEOUT = 8 in ingest.py.
+# All entries are DIRECT feed URLs (not homepages), so ingest.py matches on the
+# first parse and never runs the slow brute-force discovery path.
 #
-# Feeds marked (?) are best-guess by platform convention and weren't individually
-# verified; if a run logs NO FEED for one, it either moved or is feedless — tell me
-# and I'll chase it down. Confirmed-feedless SPAs are commented out at the bottom so
-# they never cost you discovery time.
+# Entries marked (?) are best-guess by platform convention and are NOT verified.
+# Run `python feedcheck.py --failures` after any bulk edit: it reports exactly
+# which sources are 404 / 403 / CAPTCHA-walled / paywalled / stale, at zero API
+# cost. Confirmed-feedless SPAs stay commented out at the bottom so they never
+# burn discovery time.
+#
+# Current count: 181 active sources.
 
 # --- News, Technology & Cybersecurity ---
 https://www.bleepingcomputer.com/feed/
@@ -186,29 +186,29 @@ https://codelivly.com/feed/
 
 # --- World News ---
 https://www.mintpressnews.com/feed/
-https://apnews.com/hub/ap-top-news
+https://apnews.com/hub/ap-top-news.rss   # (?) best-guess; was https://apnews.com/hub/ap-top-news
 https://feeds.bbci.co.uk/news/rss.xml
 https://www.aljazeera.com/xml/rss/all.xml
 https://www.theguardian.com/world/rss
-https://www.reuters.com/world
+https://www.reutersagency.com/feed/?best-topics=world   # (?) best-guess; was https://www.reuters.com/world
 https://nypost.com/feed
 https://finance.yahoo.com/news/rssindex
-https://www.propublica.org/
-https://theintercept.com/
-https://ground.news/
+# https://www.propublica.org/   # removed: duplicate of a proper feed URL above
+# https://theintercept.com/   # removed: duplicate of a proper feed URL above
+# https://ground.news/   # SPA, no public feed — needs the HTML-scrape fallback
 https://www.schneier.com/feed/
 https://www.twz.com/feed
 https://www.bellingcat.com/feed/
-https://www.occrp.org/en
+https://www.occrp.org/en/feed   # (?) best-guess; was https://www.occrp.org/en
 https://www.scmp.com/rss/91/feed
 https://www.ilsole24ore.com/rss/tecnologia--cyber-security.xml
 https://www.clubic.com/feed/news.rss
 
 # --- Personal Picks ---
-https://unlimitedhangout.com/feed/
-https://jasmi.news/
+# https://unlimitedhangout.com/feed/   # removed: exact duplicate
+https://jasmi.news/rss/   # (?) best-guess; was https://jasmi.news/
 https://dankornas.substack.com/feed
-https://www.thefp.com/
+https://www.thefp.com/feed   # (?) best-guess; was https://www.thefp.com/
 https://www.404media.co/rss/
 
 # --- Removed: no discoverable RSS (JS-only SPAs / feedless). Uncomment only if you
@@ -222,5 +222,3 @@ https://www.404media.co/rss/
 # https://www.therundown.ai/                  # newsletter, no public feed
 # https://darknetlive.com/                    # no reliable feed found
 # https://www.zscaler.com/blogs/security-research/  # corporate, feed path unclear
-
-```
