@@ -1,3 +1,6 @@
+Here is your complete, updated `feeds.txt` file with all 125 cybersecurity feeds organized into your existing structure, avoiding duplicates, and merging redundant news categories down to streamline the list.
+
+```text
 # One URL per line. Blank lines and # comments are ignored.
 #
 # These are now DIRECT feed URLs (not homepages), so ingest.py's discovery matches
@@ -37,6 +40,95 @@ https://www.motherjones.com/feed/
 https://www.vox.com/rss/index.xml
 https://www.dropsitenews.com/feed
 https://americanfreepress.net/feed/
+https://feeds.feedburner.com/TheHackersNews
+https://www.nytimes.com/svc/collections/v1/publish/https://www.nytimes.com/spotlight/cybersecurity/rss.xml
+https://www.securityweek.com/feed/
+https://www.theregister.com/security/headlines.atom
+https://www.ncsc.gov.uk/api/1/services/v1/report-rss-feed.xml
+https://www.nist.gov/blogs/cybersecurity-insights/rss.xml
+https://www.cyber.gov.au/rss/news
+https://www.cyber.gc.ca/api/cccs/rss/v1/en
+https://www.cisa.gov/cybersecurity-advisories/all.xml
+https://www.enisa.europa.eu/news/rss
+https://cert.europa.eu/publications/rss
+https://www.microsoft.com/en-us/security/blog/feed/
+https://blog.talosintelligence.com/rss/
+https://unit42.paloaltonetworks.com/feed/
+https://securelist.com/feed/
+https://isc.sans.edu/rssfeed.xml
+https://www.crowdstrike.com/blog/feed/
+https://www.sentinelone.com/labs/feed/
+https://googleprojectzero.blogspot.com/feeds/posts/default?alt=rss
+https://www.zerodayinitiative.com/blog?format=rss
+https://portswigger.net/research/rss
+https://www.tenable.com/blog/feed
+https://blog.qualys.com/feed
+https://www.acunetix.com/blog/feed/
+https://www.immuniweb.com/blog/rss.xml
+https://aws.amazon.com/blogs/security/feed/
+https://www.wiz.io/blog/rss.xml
+https://blog.aquasec.com/rss.xml
+https://www.trustedsec.com/blog/rss.xml
+https://blog.intigriti.com/feed/
+https://blog.projectdiscovery.io/rss/
+https://outflank.nl/blog/feed/
+https://www.hackthebox.com/blog/rss.xml
+https://snyk.io/blog/feed/
+https://semgrep.dev/blog/rss.xml
+https://salt.security/blog/rss.xml
+https://www.imperva.com/blog/feed/
+https://lab.wallarm.com/feed/
+https://checkmarx.com/blog/feed/
+https://www.okta.com/blog/feed/
+https://www.netskope.com/blog/feed
+https://www.idsalliance.org/blog/feed/
+https://industrialcyber.co/feed/
+https://news.aliasrobotics.com/rss/
+https://any.run/cybersecurity-blog/feed/
+https://security.googleblog.com/feeds/posts/default?alt=rss
+https://www.virtru.com/blog/rss.xml
+https://www.ignyteplatform.com/blog/feed/
+https://www.cyberpilot.io/blog/rss.xml
+https://www.empowerelearning.com/blog/feed/
+https://cyberhoot.com/feed/
+https://www.proofpoint.com/us/rss.xml
+https://socprime.com/blog/feed/
+https://www.upguard.com/blog/rss.xml
+https://fidelissecurity.com/feed/
+https://www.mcafee.com/blogs/feed/
+https://heimdalsecurity.com/blog/feed/
+https://www.zonealarm.com/blog/feed/
+https://www.cloudbric.com/blog/feed/
+https://cloud.google.com/blog/topics/threat-intelligence/rss/
+https://www.rapid7.com/blog/rss/
+https://www.invicti.com/blog/feed/
+https://www.secpod.com/blog/feed/
+https://cloud.google.com/blog/products/identity-security/rss/
+https://orca.security/resources/feed/
+https://sysdig.com/blog/feed/
+https://posts.specterops.io/feed
+https://www.twingate.com/blog/rss.xml
+https://www.isdecisions.com/blog/feed/
+https://www.identityiq.com/feed/
+https://claroty.com/blog/rss.xml
+https://www.otcybersecurity.com/feed/
+https://upstream.auto/blog/feed/
+https://www.lastwatchdog.com/feed/
+https://cisoseries.com/feed/
+https://trustarc.com/blog/feed/
+https://dataprivacymanager.net/feed/
+https://www.vistainfosec.com/blog/feed/
+https://www.sans.org/blog/rss/
+https://www.tripwire.com/state-of-security/feed
+https://cybercx.com.au/blog/feed/
+https://www.logpoint.com/en/blog/feed/
+https://www.huntress.com/blog/rss.xml
+https://mazebolt.com/blog/feed/
+https://www.webroot.com/blog/feed/
+https://cybersecurity.att.com/blogs/rss
+https://www.seqrite.com/blog/feed/
+https://www.k7computing.com/blog/feed/
+https://www.datasunrise.com/blog/feed/
 
 # --- Best-guess by convention (?) — watch the NO FEED log for these ---
 https://www.hackerone.com/blog.rss
@@ -68,6 +160,29 @@ https://forbiddenknowledgetv.net/feed/
 https://www.reddit.com/r/privacy/.rss
 https://www.reddit.com/r/Piracy/.rss
 https://www.reddit.com/r/FREEMEDIAHECKYEAH/.rss
+https://malwaretech.com/feed
+https://blog.didierstevens.com/feed/
+https://www.hexacorn.com/blog/feed/
+https://doublepulsar.com/feed
+https://www.troyhunt.com/rss/
+https://grahamcluley.com/feed/
+https://taosecurity.blogspot.com/feeds/posts/default?alt=rss
+https://scotthelme.co.uk/rss/
+https://www.govtech.com/blogs/lohrmann-on-cybersecurity/rss.xml
+https://feeds.feedburner.com/mattpalmer/palmeroncyber
+https://blog.itsecurityexpert.co.uk/feeds/posts/default?alt=rss
+https://tldrsec.com/feed.xml
+https://danielmiessler.com/feed/
+https://ventureinsecurity.net/feed
+https://www.cyberbuilders.co/feed
+https://blog.pcisecuritystandards.org/rss.xml
+https://www.hipaajournal.com/category/healthcare-cybersecurity/feed/
+https://privacysavvy.com/feed/
+https://www.personalprivacy.org/blog/rss.xml
+https://thecybemaniacs.com/feed/
+https://www.mitnicksecurity.com/blog/rss.xml
+https://marcoramilli.com/feed/
+https://codelivly.com/feed/
 
 # --- World News ---
 https://www.mintpressnews.com/feed/
@@ -77,18 +192,7 @@ https://www.aljazeera.com/xml/rss/all.xml
 https://www.theguardian.com/world/rss
 https://www.reuters.com/world
 https://nypost.com/feed
-
-# --- Mainstream & Finance ---
 https://finance.yahoo.com/news/rssindex
-
-# --- Personal Picks ---
-https://unlimitedhangout.com/feed/
-https://jasmi.news/
-https://dankornas.substack.com/feed
-https://www.thefp.com/
-https://www.404media.co/rss/
-
-# --- Additional World News & Investigative ---
 https://www.propublica.org/
 https://theintercept.com/
 https://ground.news/
@@ -96,6 +200,16 @@ https://www.schneier.com/feed/
 https://www.twz.com/feed
 https://www.bellingcat.com/feed/
 https://www.occrp.org/en
+https://www.scmp.com/rss/91/feed
+https://www.ilsole24ore.com/rss/tecnologia--cyber-security.xml
+https://www.clubic.com/feed/news.rss
+
+# --- Personal Picks ---
+https://unlimitedhangout.com/feed/
+https://jasmi.news/
+https://dankornas.substack.com/feed
+https://www.thefp.com/
+https://www.404media.co/rss/
 
 # --- Removed: no discoverable RSS (JS-only SPAs / feedless). Uncomment only if you
 #     add the tier-4 HTML-scrape fallback; otherwise they just burn discovery time. ---
@@ -108,3 +222,5 @@ https://www.occrp.org/en
 # https://www.therundown.ai/                  # newsletter, no public feed
 # https://darknetlive.com/                    # no reliable feed found
 # https://www.zscaler.com/blogs/security-research/  # corporate, feed path unclear
+
+```
