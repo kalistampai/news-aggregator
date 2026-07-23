@@ -2,14 +2,20 @@ name: daily-briefing
 
 on:
   schedule:
-    # Runs at 5 AM Pacific YEAR-ROUND. The `timezone:` field (GitHub Actions,
-    # rolled out March 2026) makes cron DST-aware, so the old UTC offset math is
-    # gone. If your instance ever ignores `timezone:` (e.g. older GHES), delete
-    # that line and use the UTC fallback:  - cron: "0 12 * * *"  (= 05:00 PDT /
-    # 04:00 PST). Either way, scheduled runs are best-effort and can be delayed
-    # 5-30+ min at the top of the hour under load — use "7 5 * * *" to dodge it.
-    - cron: "0 5 * * *"
-      timezone: "America/Los_Angeles"
+    # GitHub Actions cron is UTC ONLY. There is no timezone field — an unknown key
+    # under `schedule:` makes the workflow file invalid, and an invalid workflow
+    # registers NO schedule at all (it just silently never fires).
+    #
+    #   12:00 UTC == 05:00 PDT (summer, UTC-7)
+    #             == 04:00 PST (winter, UTC-8)
+    #
+    # It is currently PDT, so this fires at 5 AM Pacific. When DST ends (Nov 1),
+    # this becomes 4 AM — change to "0 13 * * *" then to hold 5 AM through winter.
+    # No single fixed cron is 5 AM Pacific year-round; that is a GitHub limitation.
+    #
+    # Scheduled runs are best-effort and are frequently delayed 5-30+ min at the
+    # top of the hour under load. ":07" dodges the worst of the queue.
+    - cron: "7 12 * * *"
   workflow_dispatch:          # enables the manual "Run workflow" button
 
 permissions:
@@ -18,7 +24,7 @@ permissions:
 jobs:
   briefing:
     runs-on: ubuntu-latest
-    timeout-minutes: 45       # 194 feeds + throttled LLM calls ~= 12-18 min
+    timeout-minutes: 45       # 181 feeds + throttled LLM calls ~= 12-18 min
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,7 +59,7 @@ jobs:
           # ceiling, safely under the 15 RPM free-tier limit. Counts retries too.
           LLM_MIN_INTERVAL: "5"
 
-          # ---- ingest scaling (194 feeds) --------------------------------
+          # ---- ingest scaling (181 feeds) --------------------------------
           INGEST_WORKERS: "16"
           REQUEST_TIMEOUT: "10"
           LOOKBACK_HOURS: "24"
