@@ -2,24 +2,33 @@ name: daily-briefing
 
 on:
   schedule:
-    # GitHub Actions cron is UTC ONLY. There is no timezone field — an unknown key
-    # under `schedule:` makes the workflow file invalid, and an invalid workflow
-    # registers NO schedule at all (it just silently never fires).
+    # GitHub Actions cron is UTC ONLY. `schedule:` accepts exactly one key —
+    # `cron`. Any other key (e.g. `timezone`) makes the workflow file invalid,
+    # and an invalid workflow registers NO schedule at all: it silently never
+    # fires, with no failed run to notice.
     #
-    #   12:00 UTC == 05:00 PDT (summer, UTC-7)
-    #             == 04:00 PST (winter, UTC-8)
+    # No fixed UTC cron can hold a constant Pacific time across DST, so this
+    # picks an hour where BOTH mappings are early morning and NOTHING EVER
+    # NEEDS CHANGING:
     #
-    # It is currently PDT, so this fires at 5 AM Pacific. When DST ends (Nov 1),
-    # this becomes 4 AM — change to "0 13 * * *" then to hold 5 AM through winter.
-    # No single fixed cron is 5 AM Pacific year-round; that is a GitHub limitation.
+    #   13:17 UTC == 06:17 PDT (summer, UTC-7)
+    #             == 05:17 PST (winter, UTC-8)
     #
-    # Scheduled runs are best-effort and are frequently delayed 5-30+ min at the
-    # top of the hour under load. ":07" dodges the worst of the queue.
-    - cron: "7 12 * * *"
+    # Minute :17 is deliberate. The scheduler queue spikes hardest at :00 and
+    # secondarily at :15/:30/:45; an odd off-quarter minute dodges the herd.
+    # Scheduled runs remain best-effort and can still be delayed under load —
+    # if one is ever skipped entirely, use the "Run workflow" button below.
+    - cron: "17 13 * * *"
   workflow_dispatch:          # enables the manual "Run workflow" button
 
 permissions:
   contents: write             # only for the keepalive commit (final step)
+
+# A delayed run must never overlap the next day's run (both would PATCH the same
+# Gist). Queue instead of running concurrently; never cancel a briefing midway.
+concurrency:
+  group: daily-briefing
+  cancel-in-progress: false
 
 jobs:
   briefing:
@@ -104,6 +113,7 @@ jobs:
       # Runs even if the pipeline failed, so a bad run can't let the schedule lapse.
       - name: Keepalive (avoid 60-day cron auto-disable)
         if: ${{ always() && github.event_name == 'schedule' }}
+        continue-on-error: true      # a failed heartbeat must not fail the run
         run: |
           last=$(git log -1 --format=%ct 2>/dev/null || echo 0)
           now=$(date +%s)
@@ -115,7 +125,7 @@ jobs:
             date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/.keepalive
             git add .github/.keepalive
             git commit -m "chore: keepalive [skip ci]" || exit 0
-            git push
+            git push || echo "keepalive push failed (non-fatal)"
           else
             echo "Default branch last touched ${age}d ago; no keepalive needed."
           fi
