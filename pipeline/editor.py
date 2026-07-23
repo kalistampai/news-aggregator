@@ -6,9 +6,16 @@ passes notable-tier items through verbatim. Writes briefing.json — the exact b
 the dashboard renders and dispatch.py pushes to the Gist.
 
 CEILING: MAX_FEATURES is the only hard cap on how many articles get summarized.
-Anything above it is NO LONGER DISCARDED — the overflow now spills into
-"also_notable" as headline+link, so a busy day degrades gracefully instead of
-silently deleting scored articles. Notable-tier has no cap.
+Anything above it is NO LONGER DISCARDED — the overflow spills into "also_notable"
+as headline+link+score, so a busy day degrades gracefully instead of silently
+deleting scored articles. Notable-tier has no cap.
+
+also_notable entries carry {title, source, url, score, tier}. `tier` is
+"overflow" for feature-tier articles pushed past MAX_FEATURES (score >= 7) and
+"notable" for genuine notable-tier items (score 5-6). The list is sorted by score
+descending. Downstream (the dashboard) relies on `score` being present to apply
+its relevance threshold; briefings archived before this change lack the field and
+are treated as unscored.
 
 Resilience:
   - Features are synthesized in small BATCHES, so one failed request no longer
@@ -36,7 +43,7 @@ IN_FILE = HERE / "scored_articles.json"
 OUT_FILE = HERE / "briefing.json"
 PROMPT = (HERE / "prompts" / "editor.txt").read_text(encoding="utf-8")
 
-# Hard ceiling on synthesized cards. 194 feeds => roughly 70-90 feature-tier
+# Hard ceiling on synthesized cards. 181 feeds => roughly 70-90 feature-tier
 # articles/day, so 120 clears a normal day with headroom. Each +10 features is
 # +1 Gemini request at EDITOR_BATCH_SIZE=10.
 MAX_FEATURES = int(os.environ.get("MAX_FEATURES", "120"))
@@ -130,11 +137,20 @@ def main() -> None:
                 card["source"] = match["source"]
                 card["score"] = match["score"]
 
-    # also_notable = notable tier + any feature-tier overflow above the ceiling.
-    also_notable = [
-        {"title": a["title"], "source": a["source"], "url": a["url"]}
-        for a in (overflow + notable)
-    ]
+    # also_notable = feature-tier overflow (above the ceiling) + notable tier.
+    #
+    # SCORE IS CARRIED THROUGH. Overflow items are feature-tier (score >= 7) and
+    # were previously written with no score at all, which made a 9-scoring
+    # spillover indistinguishable from a 5-scoring notable item and caused the
+    # dashboard's score filter to hide the best content on the busiest days.
+    # "tier" lets the UI label overflow separately from true notable-tier.
+    also_notable = (
+        [{"title": a["title"], "source": a["source"], "url": a["url"],
+          "score": a.get("score", 0), "tier": "overflow"} for a in overflow] +
+        [{"title": a["title"], "source": a["source"], "url": a["url"],
+          "score": a.get("score", 0), "tier": "notable"} for a in notable]
+    )
+    also_notable.sort(key=lambda a: a["score"], reverse=True)
 
     briefing = {
         "categories": categories,
@@ -146,10 +162,11 @@ def main() -> None:
     OUT_FILE.write_text(json.dumps(briefing, indent=2, ensure_ascii=False),
                         encoding="utf-8")
     n_cards = sum(len(v) for v in categories.values())
+    scored = sum(1 for a in also_notable if a.get("score"))
     print(f"[editor] {n_cards} feature cards"
           + (f" ({degraded} degraded)" if degraded else "")
-          + f", {len(also_notable)} notable"
-          + (f" (incl. {len(overflow)} overflow)" if overflow else "")
+          + f", {len(also_notable)} notable ({scored} scored"
+          + (f", {len(overflow)} overflow" if overflow else "") + ")"
           + f" -> {OUT_FILE.name}", flush=True)
 
 
