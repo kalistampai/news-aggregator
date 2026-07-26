@@ -33,7 +33,10 @@ concurrency:
 jobs:
   briefing:
     runs-on: ubuntu-latest
-    timeout-minutes: 45       # 181 feeds + throttled LLM calls ~= 12-18 min
+    timeout-minutes: 60       # 155 feeds, 48h lookback, 13s throttle ~= 12-15
+                              # min typical. 60 covers a 429 retry storm, which
+                              # can now exceed 45 because the inter-call gap is
+                              # 2.6x wider than before.
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,18 +63,31 @@ jobs:
           # ---- models (Flash / Flash-Lite only; never Pro on the free tier) ----
           GATEKEEPER_MODEL: gemini-3.1-flash-lite
           EDITOR_MODEL:     gemini-3.5-flash
+          # A fallback must never point AT the bottleneck. gemini-3.5-flash is
+          # capped at 5 RPM on the free tier and is already saturated, so the
+          # gatekeeper now fails over to 2.5-flash-lite (10 RPM, ~idle) instead
+          # of piling more load onto the model that is already 429-ing.
           EDITOR_FALLBACK_MODELS:     gemini-3.1-flash-lite
-          GATEKEEPER_FALLBACK_MODELS: gemini-3.5-flash
+          GATEKEEPER_FALLBACK_MODELS: gemini-2.5-flash-lite
 
           # ---- rate control ----------------------------------------------
-          # Global minimum gap between ANY two Gemini calls. 5s => 12 RPM hard
-          # ceiling, safely under the 15 RPM free-tier limit. Counts retries too.
-          LLM_MIN_INTERVAL: "5"
+          # Global minimum gap between ANY two Gemini calls, retries included.
+          # The binding limit is gemini-3.5-flash at 5 RPM — NOT the 15 RPM this
+          # comment used to assume. Google tightened the free tier and the AI
+          # Studio dashboard showed 5/5 RPM (red) on this model.
+          #    5s = 12.0 RPM  -> 2.4x over the limit; this caused the 429 wall
+          #   13s =  4.6 RPM  -> compliant
+          LLM_MIN_INTERVAL: "13"
 
-          # ---- ingest scaling (181 feeds) --------------------------------
+          # ---- ingest scaling (155 feeds) --------------------------------
           INGEST_WORKERS: "16"
           REQUEST_TIMEOUT: "10"
-          LOOKBACK_HOURS: "24"
+          # 48h, not 24h. Most sources here are weekly/monthly blogs, so a 24h
+          # window reported them all STALE every morning and missed posts that
+          # landed between runs. Costs ~2x articles; TPM sits at 3% of the cap
+          # so the headroom exists. NOTE: consecutive briefings will now overlap
+          # — dedupe is per-run, not across runs.
+          LOOKBACK_HOURS: "48"
           MAX_PER_FEED: "25"
           MAX_PER_SOURCE: "12"     # stops one noisy feed dominating the day
           MAX_TOTAL: "1500"        # global safety valve
@@ -81,7 +97,10 @@ jobs:
           # ---- summarization ceiling -------------------------------------
           GATEKEEPER_BATCH_SIZE: "30"
           MAX_FEATURES: "120"      # overflow spills to also_notable, never dropped
-          EDITOR_BATCH_SIZE: "10"
+          # 20, not 10. Each batch is one request against a 5 RPM ceiling, so
+          # halving the request count matters far more than keeping payloads
+          # small. TPM is at 3% of 250K, so the bigger payloads cost nothing.
+          EDITOR_BATCH_SIZE: "20"
         run: python run.py
 
       - name: Publish feed health report to job summary
