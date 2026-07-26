@@ -94,6 +94,15 @@ jobs:
           DATELESS_POLICY: "keep"  # "drop" = strict <24h, but loses dateless blogs
           ALLOWLIST_MODE: ""       # "1" enables the keyword allowlist (see README)
 
+          # ---- cross-run dedupe ------------------------------------------
+          # LOOKBACK_HOURS (48) is 2x the run interval (24h), so every article
+          # sits in two consecutive windows and would publish twice. seen.py
+          # keeps the ids already published in the Gist and ingest.py drops
+          # them. Costs +1 authenticated GET/run (~0.06% of the 5000/hr limit)
+          # and ~33 KB in the Gist. Set to "0" to disable and allow repeats.
+          CROSS_RUN_DEDUPE: "1"
+          SEEN_RETENTION_DAYS: "7"   # must exceed LOOKBACK_HOURS/24, with margin
+
           # ---- summarization ceiling -------------------------------------
           GATEKEEPER_BATCH_SIZE: "30"
           MAX_FEATURES: "120"      # overflow spills to also_notable, never dropped
