@@ -10,7 +10,15 @@
 # cost. Confirmed-feedless SPAs stay commented out at the bottom so they never
 # burn discovery time.
 #
-# Current count: 181 active sources.
+# READING THE HEALTH REPORT: "STALE" is NOT a failure. It means the feed loaded
+# fine but published nothing inside LOOKBACK_HOURS. Most good sources here are
+# weekly/monthly blogs, so a large STALE count every morning is normal and
+# expected. Only CAPTCHA / 4xx / 5xx / DNS / NO_FEED are real problems. Never
+# prune a feed for being STALE — that is exactly when its next post matters.
+#
+# Current count: 155 active sources.  118 - 2 (hard failures) + 39 (AI news).
+# Keep this number in sync when editing: a stale count in this header once
+# caused a false "63 feeds vanished" alarm when it disagreed with the run log.
 
 # --- News, Technology & Cybersecurity ---
 https://www.bleepingcomputer.com/feed/
@@ -43,9 +51,9 @@ https://www.theregister.com/security/headlines.atom
 https://www.ncsc.gov.uk/api/1/services/v1/report-rss-feed.xml
 https://www.nist.gov/blogs/cybersecurity-insights/rss.xml
 https://www.cyber.gov.au/rss/news
-https://www.cyber.gc.ca/api/cccs/rss/v1/en
+# https://www.cyber.gc.ca/api/cccs/rss/v1/en   # removed 2026-07-25: HTTP 400, endpoint rejects our request
 https://www.cisa.gov/cybersecurity-advisories/all.xml
-https://www.microsoft.com/en-us/security/blog/feed/
+# https://www.microsoft.com/en-us/security/blog/feed/   # removed 2026-07-25: CAPTCHA/JS interstitial, bot-blocked
 https://blog.talosintelligence.com/rss/
 https://unit42.paloaltonetworks.com/feed/
 https://securelist.com/feed/
@@ -126,6 +134,58 @@ https://www.hipaajournal.com/category/healthcare-cybersecurity/feed/
 https://privacysavvy.com/feed/
 https://www.mitnicksecurity.com/blog/rss.xml
 
+# --- AI News: releases, leaks, drops, breaking headlines --------------------
+# Highest-velocity section in this file. Model releases and leaks usually break
+# on the labs' own feeds and on community boards HOURS before trade press picks
+# them up, so all three layers are here on purpose.
+
+# -- Newsletters & analysis (the lastweekin.ai tier) --
+https://lastweekin.ai/feed
+https://importai.substack.com/feed
+https://www.deeplearning.ai/the-batch/feed/
+https://magazine.sebastianraschka.com/feed
+https://www.interconnects.ai/feed
+https://www.aisnakeoil.com/feed
+https://www.oneusefulthing.org/feed
+https://tldr.tech/api/rss/ai   # (?) daily digest
+https://simonwillison.net/atom/everything/
+
+# -- Frontier labs: official announcements (releases land here FIRST) --
+https://openai.com/news/rss.xml   # (?)
+https://deepmind.google/blog/rss.xml   # (?)
+https://blog.google/technology/ai/rss/
+https://huggingface.co/blog/feed.xml
+https://research.google/blog/rss/   # (?)
+https://www.microsoft.com/en-us/research/feed/
+https://developer.nvidia.com/blog/feed/
+https://ai.meta.com/blog/rss/   # (?)
+https://mistral.ai/news/feed.xml   # (?)
+https://stability.ai/news?format=rss   # (?)
+
+# -- Trade press: breaking AI headlines --
+https://the-decoder.com/feed/
+https://venturebeat.com/category/ai/feed/
+https://techcrunch.com/category/artificial-intelligence/feed/
+https://www.theverge.com/rss/ai-artificial-intelligence/index.xml   # (?)
+https://arstechnica.com/ai/feed/   # (?)
+https://www.technologyreview.com/topic/artificial-intelligence/feed/   # (?)
+https://syncedreview.com/feed/
+https://www.marktechpost.com/feed/
+https://www.artificialintelligence-news.com/feed/
+https://analyticsindiamag.com/feed/
+https://aibusiness.com/rss.xml   # (?)
+
+# -- AI security / red-teaming (overlaps the offensive-sec profile) --
+https://embracethered.com/blog/index.xml
+
+# -- Community: leaks and drops surface here first --
+# NOTE: Reddit aggressively blocks datacenter IPs. These may log HTTP_403 from
+# GitHub Actions even though they work from your laptop. Check the health panel
+# after the first run; if they 403 persistently, comment them out.
+https://www.reddit.com/r/LocalLLaMA/.rss
+https://www.reddit.com/r/MachineLearning/.rss
+https://www.reddit.com/r/singularity/.rss
+
 # --- World News ---
 https://www.mintpressnews.com/feed/
 https://feeds.bbci.co.uk/news/rss.xml
@@ -148,14 +208,3 @@ https://www.clubic.com/feed/news.rss
 https://www.thefp.com/feed   # (?) best-guess; was https://www.thefp.com/
 https://www.404media.co/rss/
 
-# --- Removed: no discoverable RSS (JS-only SPAs / feedless). Uncomment only if you
-#     add the tier-4 HTML-scrape fallback; otherwise they just burn discovery time. ---
-# https://www.emergentmind.com/papers/        # SPA, no feed
-# https://paperswithcode.com/                 # no site-wide RSS
-# https://www.metaculus.com/home/             # SPA, API only
-# https://www.stealthmole.com/resources/intelligence-hub  # corporate, no feed
-# https://ddosecrets.com/                     # wiki, no reliable feed
-# https://fmhy.net/posts/                     # static docs site, no feed
-# https://www.therundown.ai/                  # newsletter, no public feed
-# https://darknetlive.com/                    # no reliable feed found
-# https://www.zscaler.com/blogs/security-research/  # corporate, feed path unclear
