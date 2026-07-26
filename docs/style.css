@@ -17,9 +17,20 @@
   --sans: "IBM Plex Sans", system-ui, sans-serif;
   --display: "Space Grotesk", system-ui, sans-serif;
   --maxw: 940px;
+
+  /* BUILD STAMP — read back by script.js via getComputedStyle. If this string
+     does not match BUILD in script.js, the browser/CDN is serving a stale
+     style.css and the page says so out loud instead of failing silently.
+     Bump this together with ?v=, data-build, and BUILD. */
+  --build: "2026-07-26a";
 }
 
 * { box-sizing: border-box; }
+/* Author-origin reassertion of the UA rule. Any author `display` declaration
+   outranks the UA stylesheet's [hidden]{display:none}, which silently breaks
+   every element toggled via the hidden attribute. Declaring it here, with
+   !important, makes that class of bug impossible site-wide. */
+[hidden] { display: none !important; }
 html { scroll-behavior: smooth; }
 body {
   margin: 0;
@@ -56,7 +67,7 @@ body {
 .wordmark__cursor { color: var(--accent); animation: blink 1.2s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
-.masthead__meta { display: flex; align-items: center; gap: .8rem; }
+.masthead__meta { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; }
 .tag {
   font-family: var(--mono); font-size: .68rem; font-weight: 700; letter-spacing: .12em;
   padding: .28rem .55rem; border: 1px solid var(--accent); color: var(--accent);
@@ -64,9 +75,197 @@ body {
 }
 .tag[data-state="live"] { border-color: var(--accent); color: var(--accent); }
 .tag[data-state="error"] { border-color: var(--hot); color: var(--hot); }
+.flag {
+  font-family: var(--mono); font-size: .62rem; font-weight: 700; letter-spacing: .14em;
+  padding: .24rem .5rem; border: 1px solid var(--amber); color: var(--amber);
+  border-radius: 2px; text-transform: uppercase;
+}
 .stamp { font-family: var(--mono); font-size: .78rem; color: var(--ink-dim); letter-spacing: .04em; }
 
 .masthead__sub { margin: .5rem 0 0; color: var(--ink-dim); font-size: .92rem; }
+.masthead__sub a {
+  color: var(--accent); text-decoration: none;
+  border-bottom: 1px dotted var(--accent-dim); transition: border-color .15s;
+}
+.masthead__sub a:hover { border-bottom-color: var(--accent); }
+.masthead__sub a:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- archive navigator ---------- */
+.masthead__archive {
+  margin-top: 1rem; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+  font-family: var(--mono);
+}
+.archive__label { color: var(--ink-faint); font-size: .72rem; letter-spacing: .1em; }
+.archive__count { color: var(--ink-faint); font-size: .68rem; letter-spacing: .06em; }
+.archive__nav, .archive__latest {
+  font-family: var(--mono); background: var(--surface); color: var(--ink-dim);
+  border: 1px solid var(--line); border-radius: 2px; cursor: pointer;
+  padding: .3rem .5rem; font-size: .74rem; line-height: 1;
+  transition: border-color .15s, color .15s;
+}
+.archive__nav:hover:not(:disabled),
+.archive__latest:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.archive__nav:disabled, .archive__latest:disabled { opacity: .3; cursor: default; }
+.archive__latest { letter-spacing: .08em; text-transform: uppercase; font-size: .64rem; }
+.archive__select-wrap { position: relative; display: inline-flex; }
+.archive__select {
+  font-family: var(--mono); font-size: .76rem; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 2px;
+  padding: .3rem 1.7rem .3rem .6rem; cursor: pointer; letter-spacing: .04em;
+  -webkit-appearance: none; appearance: none;
+}
+.archive__select:focus { outline: none; border-color: var(--accent); }
+.archive__select-wrap::after {
+  content: "▾"; position: absolute; right: .55rem; top: 50%; transform: translateY(-50%);
+  color: var(--ink-faint); pointer-events: none; font-size: .7rem;
+}
+
+/* ---------- search / filter ---------- */
+.masthead__search {
+  margin-top: .7rem; display: flex; align-items: center; gap: .5rem;
+  flex-wrap: wrap; font-family: var(--mono);
+}
+.search__label { color: var(--ink-faint); font-size: .72rem; letter-spacing: .1em; }
+.search__input {
+  flex: 1 1 300px; max-width: 520px;
+  font-family: var(--mono); font-size: .76rem; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 2px;
+  padding: .38rem .6rem; letter-spacing: .02em;
+  transition: border-color .15s;
+}
+.search__input::placeholder { color: var(--ink-faint); }
+.search__input:focus { outline: none; border-color: var(--accent); }
+.search__input::-webkit-search-cancel-button { filter: invert(.6); cursor: pointer; }
+.search__clear {
+  font-family: var(--mono); font-size: .64rem; letter-spacing: .08em;
+  text-transform: uppercase; cursor: pointer;
+  background: var(--surface); color: var(--ink-dim);
+  border: 1px solid var(--line); border-radius: 2px; padding: .3rem .5rem; line-height: 1;
+  transition: border-color .15s, color .15s;
+}
+.search__clear:hover { border-color: var(--accent); color: var(--accent); }
+.search__count { font-family: var(--mono); font-size: .7rem; color: var(--ink-faint); }
+.search__count[data-empty="true"] { color: var(--hot); }
+
+.state__reset {
+  display: inline-block; margin-left: .6rem;
+  font-family: var(--mono); font-size: .7rem; letter-spacing: .06em;
+  background: var(--surface); color: var(--ink-dim); cursor: pointer;
+  border: 1px solid var(--line); border-radius: 2px; padding: .25rem .5rem;
+}
+.state__reset:hover { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- control bar (score / collapse / refresh) ---------- */
+.masthead__controls {
+  margin-top: .6rem; display: flex; align-items: center; gap: .5rem;
+  flex-wrap: wrap; font-family: var(--mono);
+}
+.ctl__label { color: var(--ink-faint); font-size: .72rem; letter-spacing: .1em; }
+.ctl__sep { color: var(--line); font-size: .8rem; }
+.ctl__range { width: 132px; accent-color: var(--accent); cursor: pointer; }
+.ctl__value {
+  font-size: .72rem; color: var(--ink-faint); min-width: 2.6rem; letter-spacing: .05em;
+}
+.ctl__value[data-on="true"] { color: var(--accent); font-weight: 700; }
+.ctl__btn {
+  font-family: var(--mono); font-size: .66rem; letter-spacing: .07em;
+  background: var(--surface); color: var(--ink-dim); cursor: pointer;
+  border: 1px solid var(--line); border-radius: 2px; padding: .3rem .5rem; line-height: 1;
+  transition: border-color .15s, color .15s;
+}
+.ctl__btn:hover { border-color: var(--accent); color: var(--accent); }
+.ctl__btn.is-on { border-color: var(--accent); color: var(--accent); }
+/* Global collapse / expand — 44px+ tap targets (iOS HIG 44, Material 48). */
+.ctl__group { display: inline-flex; gap: .35rem; }
+.ctl__bigbtn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .45rem;
+  min-height: 44px; padding: .5rem .8rem;
+  font-family: var(--mono); font-size: .68rem; letter-spacing: .08em;
+  background: var(--surface); color: var(--ink-dim);
+  border: 1px solid var(--line); border-radius: 3px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.ctl__bigbtn:hover { border-color: var(--accent); color: var(--accent); background: var(--surface-2); }
+.ctl__bigbtn:active { background: var(--bg-2); transform: translateY(1px); }
+.ctl__bigbtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ctl__bigbtn-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; flex: 0 0 auto;
+  border: 1px solid var(--line); border-radius: 2px; background: var(--bg-2);
+  color: var(--accent); font-size: .62rem; line-height: 1;
+}
+.ctl__bigbtn-icon--open { transform: rotate(90deg); }
+.ctl__bigbtn:hover .ctl__bigbtn-icon { border-color: var(--accent); }
+.ctl__state {
+  font-family: var(--mono); font-size: .66rem; color: var(--ink-faint);
+  letter-spacing: .05em; min-width: 6.5rem;
+}
+.ctl__state[data-on="true"] { color: var(--accent); }
+
+.ctl__toggle {
+  display: inline-flex; align-items: center; gap: .35rem;
+  font-size: .7rem; color: var(--ink-dim); cursor: pointer; letter-spacing: .04em;
+}
+.ctl__toggle input { accent-color: var(--accent); cursor: pointer; }
+.ctl__select {
+  font-family: var(--mono); font-size: .68rem; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 2px;
+  padding: .25rem .35rem; cursor: pointer;
+}
+.ctl__select:disabled { opacity: .4; cursor: default; }
+
+/* ---------- leaderboard ---------- */
+.lb__controls {
+  display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+  margin-bottom: .7rem; font-family: var(--mono);
+}
+.lb__table { font-family: var(--mono); font-size: .74rem; }
+.lb__head, .lb__row {
+  display: grid; grid-template-columns: 2rem 1fr 3rem 3.6rem 3rem 3rem;
+  align-items: center; gap: .4rem; padding: .3rem 0;
+}
+.lb__head {
+  color: var(--ink-faint); font-size: .64rem; letter-spacing: .1em;
+  text-transform: uppercase; border-bottom: 1px solid var(--line);
+}
+.lb__row { border-bottom: 1px dashed var(--line); }
+.lb__row[data-top="true"] .lb__name { color: var(--ink); }
+.lb__rank { color: var(--ink-faint); font-size: .68rem; }
+.lb__src { position: relative; display: flex; align-items: center; min-width: 0; }
+.lb__bar {
+  position: absolute; left: 0; top: 0; bottom: 0;
+  background: var(--accent-dim); opacity: .35; border-radius: 1px;
+}
+.lb__name {
+  position: relative; color: var(--ink-dim); padding-left: .3rem;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lb__n { text-align: right; color: var(--ink-dim); }
+.lb__n--dim { color: var(--ink-faint); }
+.lb__n.is-hot { color: var(--hot); font-weight: 700; }
+
+/* ---------- diff view ---------- */
+.diff__base { font-family: var(--mono); font-size: .74rem; color: var(--accent); }
+.diff__grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.diff__col h4 {
+  margin: 0 0 .4rem; font-family: var(--mono); font-size: .7rem;
+  letter-spacing: .1em; text-transform: uppercase; font-weight: 500;
+}
+.diff__col h4 span { color: var(--ink-faint); }
+.diff__col--add h4 { color: var(--accent); }
+.diff__col--drop h4 { color: var(--hot); }
+.diff__col--move h4 { color: var(--amber); }
+.diff__col ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
+.diff__col li { font-size: .76rem; line-height: 1.35; }
+.diff__col a { color: var(--ink-dim); text-decoration: none; }
+.diff__col a:hover { color: var(--accent); }
+.diff__meta {
+  display: block; font-family: var(--mono); font-size: .64rem; color: var(--ink-faint);
+}
+.diff__more { font-family: var(--mono); font-size: .66rem; color: var(--ink-faint); }
+
 .masthead__stats {
   margin-top: 1rem; font-family: var(--mono); font-size: .78rem;
   color: var(--ink-faint); display: flex; gap: .55rem; align-items: center; flex-wrap: wrap;
@@ -74,25 +273,211 @@ body {
 .masthead__stats b { color: var(--accent); font-weight: 700; }
 .masthead__stats .dot { color: var(--line); }
 
+/* ---------- feed health panel ---------- */
+.health { max-width: var(--maxw); margin: 0 auto; padding: 1rem 1.5rem 0; }
+.health__toggle {
+  width: 100%; display: flex; align-items: center; gap: .6rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 4px;
+  padding: .6rem .8rem; cursor: pointer; text-align: left;
+  font-family: var(--mono); font-size: .78rem; color: var(--ink-dim);
+  transition: border-color .15s;
+}
+.health__toggle:hover { border-color: var(--accent-dim); }
+.health__dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto;
+  background: var(--ink-faint);
+}
+.health__dot[data-level="good"] { background: var(--accent); box-shadow: 0 0 6px var(--accent-dim); }
+.health__dot[data-level="warn"] { background: var(--amber); box-shadow: 0 0 6px #eaa43e55; }
+.health__dot[data-level="bad"]  { background: var(--hot);   box-shadow: 0 0 6px #ff5f4a55; }
+.health__headline { flex: 1 1 auto; }
+.health__headline b { color: var(--accent); font-weight: 700; }
+.health__headline b.down { color: var(--hot); }
+.health__delta {
+  font-size: .68rem; letter-spacing: .06em; padding: .18rem .45rem;
+  border-radius: 2px; border: 1px solid var(--line); white-space: nowrap;
+}
+.health__delta[data-level="bad"]  { color: var(--hot);    border-color: #ff5f4a55; }
+.health__delta[data-level="good"] { color: var(--accent); border-color: var(--accent-dim); }
+.health__chev { color: var(--ink-faint); transition: transform .18s; }
+.health__toggle[aria-expanded="true"] .health__chev { transform: rotate(180deg); }
+
+.health__body {
+  border: 1px solid var(--line); border-top: none;
+  border-radius: 0 0 4px 4px; padding: .9rem 1rem 1rem;
+  background: var(--bg-2);
+}
+.health__foot {
+  margin: 1rem 0 0; font-family: var(--mono); font-size: .68rem;
+  color: var(--ink-faint); line-height: 1.5;
+}
+
+.health__deltas:not(:empty) { margin-bottom: .4rem; }
+.health__groups { margin-top: .2rem; }
+
+.delta { margin-bottom: .9rem; }
+.delta h4 {
+  margin: 0 0 .35rem; font-family: var(--mono); font-size: .7rem;
+  letter-spacing: .1em; text-transform: uppercase; font-weight: 500;
+}
+.delta h4 span { color: var(--ink-faint); }
+.delta--bad h4  { color: var(--hot); }
+.delta--good h4 { color: var(--accent); }
+.delta--warn h4 { color: var(--amber); }
+.delta--info h4 { color: var(--ink-dim); }
+.delta ul { list-style: none; margin: 0; padding: 0; display: grid; gap: .2rem; }
+.delta li { font-family: var(--mono); font-size: .74rem; color: var(--ink-dim); }
+.delta code { color: var(--ink); background: none; }
+.delta .arrow { color: var(--ink-faint); font-size: .68rem; }
+.delta__none {
+  margin: 0 0 .6rem; font-family: var(--mono); font-size: .74rem; color: var(--ink-faint);
+}
+
+.hgroup { border-top: 1px dashed var(--line); padding: .6rem 0 .2rem; }
+.hgroup__head {
+  display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap;
+  font-family: var(--mono); margin-bottom: .3rem;
+}
+.hgroup__code { font-size: .72rem; letter-spacing: .08em; color: var(--amber); font-weight: 700; }
+.hgroup[data-severe="true"] .hgroup__code { color: var(--hot); }
+.hgroup__n { font-size: .68rem; color: var(--ink-faint); }
+.hgroup__help { font-size: .7rem; color: var(--ink-faint); }
+.hgroup__list { list-style: none; margin: 0; padding: 0 0 0 .2rem; display: grid; gap: .18rem; }
+.hgroup__list li { font-family: var(--mono); font-size: .74rem; }
+.hgroup__list a { color: var(--ink-dim); text-decoration: none; }
+.hgroup__list a:hover { color: var(--accent); text-decoration: underline; }
+.hgroup__detail { color: var(--ink-faint); font-size: .66rem; margin-left: .4rem; }
+
+/* ---------- section tabs ---------- */
+.tabs {
+  max-width: var(--maxw); margin: 0 auto; padding: 1rem 1.5rem 0;
+  display: flex; align-items: center; gap: .4rem; flex-wrap: wrap;
+}
+.tab__lead {
+  font-family: var(--mono); font-size: .72rem; letter-spacing: .1em;
+  color: var(--ink-faint); margin-right: .2rem;
+}
+.tab {
+  display: inline-flex; align-items: center; gap: .45rem;
+  min-height: 40px; padding: .4rem .7rem;
+  font-family: var(--mono); font-size: .7rem; letter-spacing: .06em;
+  text-transform: uppercase;
+  background: var(--surface); color: var(--ink-dim);
+  border: 1px solid var(--line); border-radius: 3px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.tab:hover { border-color: var(--accent); color: var(--accent); background: var(--surface-2); }
+.tab:active { transform: translateY(1px); }
+.tab:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tab.is-on {
+  border-color: var(--accent); color: var(--accent);
+  background: var(--bg-2); box-shadow: inset 0 -2px 0 var(--accent);
+}
+.tab[data-empty="true"]:not(.is-on) { opacity: .45; }
+.tab__label { white-space: nowrap; }
+.tab__count {
+  font-size: .62rem; color: var(--ink-faint);
+  border: 1px solid var(--line); border-radius: 999px; padding: .05rem .4rem;
+}
+.tab.is-on .tab__count { color: var(--accent); border-color: var(--accent-dim); }
+
 /* ---------- board ---------- */
 .board { max-width: var(--maxw); margin: 0 auto; padding: 1.6rem 1.5rem 4rem; }
 
-.category { margin-top: 2.6rem; }
+.category { margin-top: 2.6rem; isolation: isolate; }
 .category:first-child { margin-top: 1.4rem; }
+/* Collapse is driven by an INLINE style set in script.js (paintCategory), which
+   outranks everything here — these three rules are redundant safety nets, not
+   the mechanism. Kept because they cost nothing and cover a JS-disabled render.
+   Note the ordering trap they exist to defend against: the UA stylesheet's
+   [hidden]{display:none} is a normal declaration in the user-agent origin, and
+   ANY author `display` declaration outranks it, so a bare
+   `.category__body { display: block; }` alone silently defeats the attribute. */
+.category__body { display: block; }
+.category__body[hidden] { display: none !important; }
+.category[data-collapsed="true"] .category__body { display: none !important; }
+.category[data-collapsed="true"] > .category__body { display: none !important; }
+
+/* Sticky lives on the HEADING wrapper, not on the clickable button.
+   z-index is raised so a header that has scrolled up can never be covered by
+   the next one, and the fade is a ::after pseudo-element with pointer-events
+   disabled — the old transparent gradient tail was still hit-testable and
+   silently swallowed clicks aimed at the header above it. */
 .category__head {
-  position: sticky; top: 0; z-index: 5;
-  display: flex; align-items: baseline; gap: .7rem;
-  padding: .7rem 0 .6rem;
-  background: linear-gradient(to bottom, var(--bg) 60%, transparent);
-  backdrop-filter: blur(2px);
+  position: sticky; top: 0; z-index: 20;
+  margin: 0; padding: 0; font: inherit;
 }
-.category__head h2 {
+.category__head::after {
+  content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 14px;
+  background: linear-gradient(to bottom, var(--bg), transparent);
+  pointer-events: none;
+}
+
+/* The hit target. Block-level: `display:flex` directly on <button> is
+   unreliable in WebKit, so the flex row lives on .category__inner instead. */
+.category__toggle {
+  display: block; width: 100%; min-height: 52px;   /* > 44px iOS / 48px Material */
+  margin: 0; padding: .55rem .5rem .55rem 0;
+  background: var(--bg); border: none; border-radius: 3px;
+  cursor: pointer; text-align: left; font: inherit; color: inherit;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;      /* no 300ms tap delay, no double-tap zoom */
+  transition: background .15s;
+}
+.category__toggle:hover { background: var(--surface); }
+.category__toggle:hover .category__name { color: var(--ink); }
+.category__toggle:hover .category__chev { border-color: var(--accent); color: var(--accent); }
+.category__toggle:active { background: var(--surface-2); }
+.category__toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.category__inner {
+  display: flex; align-items: center; gap: .65rem; width: 100%;
+}
+
+/* Boxed chevron: a 34px square badge, unmissable and independently obvious. */
+.category__chev {
+  flex: 0 0 auto; pointer-events: none;   /* clicks belong to the button */
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 34px; height: 34px;
+  border: 1px solid var(--line); border-radius: 3px;
+  background: var(--surface);
+  color: var(--accent); font-family: var(--mono); font-size: .8rem; line-height: 1;
+  /* transform is set INLINE by paintCategory so the arrow can never disagree
+     with the body. These two rules are the fallback and they are keyed to the
+     SAME data-collapsed attribute the body is keyed to — so if the inline style
+     is ever missing, the arrow still cannot lie about the state. */
+  transform: rotate(90deg);
+  transition: transform .2s ease, border-color .15s, color .15s, background .15s;
+}
+.category[data-collapsed="true"] .category__chev {
+  transform: rotate(0deg);
+  border-color: var(--accent-dim); background: var(--bg-2);
+}
+
+.category__name {
   font-family: var(--mono); font-weight: 500; font-size: .82rem;
-  letter-spacing: .16em; text-transform: uppercase; color: var(--accent); margin: 0;
+  letter-spacing: .16em; text-transform: uppercase; color: var(--accent);
+  transition: color .15s;
 }
 .category__head .slash { color: var(--ink-faint); font-family: var(--mono); }
-.category__head .count { font-family: var(--mono); font-size: .72rem; color: var(--ink-faint); }
-.category__head .rule { flex: 1; height: 1px; background: var(--line); align-self: center; }
+.category__head .rule { flex: 1 1 auto; height: 1px; background: var(--line); }
+.category__head .count {
+  flex: 0 0 auto; font-family: var(--mono); font-size: .7rem; color: var(--ink-faint);
+  border: 1px solid var(--line); border-radius: 999px; padding: .1rem .5rem;
+  transition: color .15s, border-color .15s;
+}
+.category[data-collapsed="true"] .count { color: var(--accent); border-color: var(--accent-dim); }
+
+/* Explicit word for the current action — state feedback that does not rely on
+   interpreting an arrow's direction. */
+.category__state {
+  flex: 0 0 auto; font-family: var(--mono); font-size: .62rem;
+  letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint);
+  border: 1px solid transparent; padding: .1rem .3rem;
+}
+.category[data-collapsed="true"] .category__state { color: var(--accent); }
 
 /* ---------- card ---------- */
 .card {
@@ -106,9 +491,10 @@ body {
   display: flex; justify-content: center;
   background: var(--bg-2); border-right: 1px solid var(--line);
 }
-/* signature: vertical segmented signal meter */
+/* signature: vertical segmented signal meter — the relevance score, 0-10 mapped
+   onto 5 segments, filling bottom-up. Top segment goes red at 9+. */
 .meter { width: 8px; height: 100%; min-height: 54px;
-  display: flex; flex-direction: column-reverse; gap: 2px; }
+  display: flex; flex-direction: column-reverse; gap: 2px; cursor: help; }
 .meter i { flex: 1; background: var(--line); border-radius: 1px; }
 .meter i.on { background: var(--accent); box-shadow: 0 0 5px var(--accent-dim); }
 .meter i.hot { background: var(--hot); box-shadow: 0 0 5px #ff5f4a55; }
@@ -160,7 +546,16 @@ body {
   text-transform: uppercase; flex: 0 0 128px; letter-spacing: .05em;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.notable__ttl { color: var(--ink-dim); font-size: .9rem; transition: color .15s; }
+.notable__ttl { color: var(--ink-dim); font-size: .9rem; transition: color .15s; flex: 1 1 auto; }
+/* Score badge — makes feature-tier overflow (>=7) visually distinct from true
+   notable-tier items now that editor.py carries the score through. */
+.notable__score {
+  flex: 0 0 auto; font-family: var(--mono); font-size: .62rem; color: var(--ink-faint);
+  border: 1px solid var(--line); border-radius: 999px; padding: .05rem .4rem;
+  margin-left: auto;
+}
+.notable__score[data-hi="true"] { color: var(--accent); border-color: var(--accent-dim); }
+.notable__item[data-tier="overflow"] { border-left: 2px solid var(--accent-dim); padding-left: .5rem; }
 
 /* ---------- states ---------- */
 .state { text-align: center; padding: 5rem 1rem; color: var(--ink-faint);
@@ -184,8 +579,65 @@ body {
   .card__rail { width: 22px; }
   .notable__src { flex-basis: 84px; }
   .masthead { padding-top: 2.2rem; }
+  .archive__select { max-width: 46vw; }
+  .health { padding-left: 1rem; padding-right: 1rem; }
+  .health__toggle { font-size: .72rem; }
+  .hgroup__help { display: none; }
+  .search__input { flex-basis: 100%; max-width: none; }
+  .search__count { flex-basis: 100%; }
+  .ctl__range { width: 96px; }
+  .ctl__sep { display: none; }
+  .lb__head, .lb__row { grid-template-columns: 1.6rem 1fr 2.4rem 2.4rem 2.4rem 2.4rem; font-size: .68rem; }
+  .diff__grid { grid-template-columns: 1fr; }
+  /* Tabs scroll horizontally on narrow screens instead of wrapping into a
+     multi-row block that pushes the briefing off the first screen. */
+  .tabs {
+    flex-wrap: nowrap; overflow-x: auto; padding-left: 1rem; padding-right: 1rem;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { flex: 0 0 auto; min-height: 44px; }
+  .tab__lead { display: none; }
+  .category__toggle { min-height: 56px; padding-right: .25rem; }
+  .category__chev { width: 38px; height: 38px; font-size: .9rem; }
+  .category__name { font-size: .76rem; letter-spacing: .12em; }
+  .category__state { display: none; }
+  .category__head .rule { min-width: 8px; }
+  .ctl__group { display: flex; width: 100%; gap: .4rem; }
+  .ctl__bigbtn { flex: 1 1 0; min-height: 48px; font-size: .66rem; padding: .5rem .4rem; }
+  .ctl__state { width: 100%; min-width: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .scanline { display: none; }
+  .category__chev { transition: none !important; }
+}
+
+/* ---------- stale-asset banner ---------- */
+/* Injected by script.js only when index.html / script.js / style.css disagree
+   about the build string. That mismatch is the single actual cause of the
+   "arrow moves but nothing collapses" symptom: a cached style.css carrying the
+   chevron rule without the matching hide rule. Making it visible turns a silent
+   CSS-versioning bug into a one-line instruction. */
+.stalebar {
+  position: sticky; top: 0; z-index: 200;
+  display: block; width: 100%;
+  padding: .6rem 1rem;
+  background: var(--hot); color: #12060a;
+  font-family: var(--mono); font-size: .7rem; letter-spacing: .04em;
+  text-align: center; border: none; cursor: pointer;
+}
+.stalebar b { font-weight: 700; }
+
+/* ---------- touch devices ---------- */
+/* :hover states latch on touch screens — a tapped header keeps the hover
+   background and accent chevron until you tap elsewhere, which reads as
+   "stuck open". Confine every hover rule to devices that really hover. */
+@media (hover: none) {
+  .category__toggle:hover { background: var(--bg); }
+  .category__toggle:hover .category__name { color: var(--accent); }
+  .category__toggle:hover .category__chev { border-color: var(--line); color: var(--accent); }
+  .category[data-collapsed="true"] .category__toggle:hover .category__chev {
+    border-color: var(--accent-dim);
+  }
 }

@@ -3,13 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- Auto-refresh was removed by design: no meta refresh directive, no timer in
+       script.js. (Tag name deliberately not spelled out so a grep audit of this
+       file returns a clean zero.)
+
+       CACHE BUSTING: style.css and script.js carry ?v=<build>. GitHub Pages sits
+       behind a CDN that will happily serve a previous script.js/style.css for
+       some time after a push; that is what produced the "arrow rotates but
+       nothing collapses" symptom (old CSS had the chevron rule, not the
+       hide rule). The build string now lives in FOUR places and script.js
+       verifies all of them at boot, showing a red banner if they disagree:
+         1. the ?v= query on both <link> and <script> below
+         2. data-build on <body>
+         3. `BUILD` in script.js
+         4. `--build` on :root in style.css
+       Bump all four together whenever you change these files. -->
   <title>DISPATCH — Daily Intel Briefing</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=2026-07-26a" />
 </head>
-<body>
+<body data-build="2026-07-26a">
   <div class="scanline" aria-hidden="true"></div>
 
   <header class="masthead">
@@ -17,10 +32,57 @@
       <h1 class="wordmark">DISPATCH<span class="wordmark__cursor">_</span></h1>
       <div class="masthead__meta">
         <span class="tag" id="statusTag">BOOTING</span>
+        <span class="flag" id="archiveFlag" hidden>ARCHIVED</span>
         <time class="stamp" id="dateStamp">—</time>
       </div>
     </div>
-    <p class="masthead__sub">Offensive-security &amp; intel briefing · auto-compiled daily · single operator</p>
+    <p class="masthead__sub">Daily news aggregated and compiled · review <a href="https://github.com/kalistampai/news-aggregator/blob/main/pipeline/feeds.txt" target="_blank" rel="noopener noreferrer">news sources</a> to make updates</p>
+
+    <div class="masthead__archive" id="archiveBar" hidden>
+      <span class="archive__label">// log</span>
+      <button class="archive__nav" id="prevDay" title="Older day" aria-label="Older day">◄</button>
+      <span class="archive__select-wrap">
+        <select class="archive__select" id="archiveSelect" aria-label="Select briefing date"></select>
+      </span>
+      <button class="archive__nav" id="nextDay" title="Newer day" aria-label="Newer day">►</button>
+      <button class="archive__latest" id="latestBtn" title="Jump to latest">latest</button>
+      <span class="archive__count" id="archiveCount"></span>
+    </div>
+
+    <div class="masthead__search" id="searchBar" hidden>
+      <span class="search__label">// filter</span>
+      <input type="search" class="search__input" id="searchInput"
+             placeholder="Keyword search (title, source, reasoning, bullets)…"
+             aria-label="Filter news items by keyword" autocomplete="off" spellcheck="false" />
+      <button class="search__clear" id="searchClear" title="Clear filter (Esc)" hidden>clear</button>
+      <span class="search__count" id="searchCount"></span>
+    </div>
+
+    <div class="masthead__controls" id="controlBar" hidden>
+      <span class="ctl__label">// score</span>
+      <input type="range" class="ctl__range" id="scoreRange" min="0" max="10" step="1" value="0"
+             aria-label="Minimum relevance score" />
+      <span class="ctl__value" id="scoreValue">all</span>
+      <button class="ctl__btn" id="scoreReset" title="Reset score threshold" hidden>reset</button>
+
+      <span class="ctl__sep" aria-hidden="true">|</span>
+
+      <span class="ctl__group" role="group" aria-label="Category sections">
+        <button type="button" class="ctl__bigbtn" id="collapseAll"
+                title="Collapse every category (c)">
+          <span class="ctl__bigbtn-icon" aria-hidden="true">&#9654;</span>
+          <span>collapse all</span>
+        </button>
+        <button type="button" class="ctl__bigbtn" id="expandAll"
+                title="Expand every category (e)">
+          <span class="ctl__bigbtn-icon ctl__bigbtn-icon--open" aria-hidden="true">&#9654;</span>
+          <span>expand all</span>
+        </button>
+      </span>
+      <span class="ctl__state" id="collapseState" aria-live="polite"></span>
+
+    </div>
+
     <div class="masthead__stats" id="statBar" hidden>
       <span><b id="featCount">0</b> features</span>
       <span class="dot">·</span>
@@ -31,6 +93,71 @@
       <span class="stamp" id="genStamp">—</span>
     </div>
   </header>
+
+  <!-- Feed health: collapsed to one line; expands to the full source report. -->
+  <section class="health" id="healthPanel" hidden>
+    <button class="health__toggle" id="healthToggle" aria-expanded="false" aria-controls="healthBody">
+      <span class="health__dot" id="healthDot" aria-hidden="true"></span>
+      <span class="health__headline" id="healthHeadline">Feed health</span>
+      <span class="health__delta" id="healthDeltaTag" hidden></span>
+      <span class="health__chev" aria-hidden="true">▾</span>
+    </button>
+    <div class="health__body" id="healthBody" hidden>
+      <div class="health__deltas" id="healthDeltas"></div>
+      <div class="health__groups" id="healthGroups"></div>
+      <p class="health__foot" id="healthFoot"></p>
+    </div>
+  </section>
+
+  <!-- Source leaderboard: which feeds actually earn their place. -->
+  <section class="health" id="boardPanel" hidden>
+    <button class="health__toggle" id="boardToggle" aria-expanded="false" aria-controls="boardBody">
+      <span class="health__dot" data-level="good" aria-hidden="true"></span>
+      <span class="health__headline" id="boardHeadline">Source leaderboard</span>
+      <span class="health__chev" aria-hidden="true">▾</span>
+    </button>
+    <div class="health__body" id="boardBody" hidden>
+      <div class="lb__controls">
+        <span class="ctl__label">// rank by</span>
+        <button class="ctl__btn is-on" data-sort="features">features</button>
+        <button class="ctl__btn" data-sort="avg">avg score</button>
+        <button class="ctl__btn" data-sort="best">best score</button>
+        <button class="ctl__btn" data-sort="total">total items</button>
+        <span class="ctl__sep" aria-hidden="true">|</span>
+        <label class="ctl__toggle">
+          <input type="checkbox" id="lbAllDays" />
+          <span>all archived days</span>
+        </label>
+      </div>
+      <div class="lb__table" id="lbTable"></div>
+      <p class="health__foot" id="lbFoot"></p>
+    </div>
+  </section>
+
+  <!-- Diff view: what changed between two briefings. -->
+  <section class="health" id="diffPanel" hidden>
+    <button class="health__toggle" id="diffToggle" aria-expanded="false" aria-controls="diffBody">
+      <span class="health__dot" id="diffDot" aria-hidden="true"></span>
+      <span class="health__headline" id="diffHeadline">Diff view</span>
+      <span class="health__chev" aria-hidden="true">▾</span>
+    </button>
+    <div class="health__body" id="diffBody" hidden>
+      <div class="lb__controls">
+        <span class="ctl__label">// compare</span>
+        <span class="diff__base" id="diffBase">—</span>
+        <span class="ctl__label">against</span>
+        <span class="archive__select-wrap">
+          <select class="archive__select" id="diffSelect" aria-label="Compare against date"></select>
+        </span>
+      </div>
+      <div class="diff__grid" id="diffGrid"></div>
+      <p class="health__foot" id="diffFoot"></p>
+    </div>
+  </section>
+
+  <!-- Section tabs: built from the day's categories in script.js (CATEGORY_ORDER).
+       Hidden when a briefing has fewer than two categories. -->
+  <nav class="tabs" id="tabBar" role="tablist" aria-label="Briefing sections" hidden></nav>
 
   <main id="board" class="board" aria-live="polite">
     <div class="state" id="loadingState">
@@ -59,6 +186,6 @@
     <span id="footerNote">DISPATCH · static dashboard · data via GitHub Gist</span>
   </footer>
 
-  <script src="script.js"></script>
+  <script src="script.js?v=2026-07-26a"></script>
 </body>
 </html>
