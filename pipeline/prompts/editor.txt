@@ -11,8 +11,23 @@ A JSON object: {"today": "YYYY-MM-DD", "features": [{"id","title","source","url"
 
 EXECUTION RULES:
 1. Group features under these categories (include only those that have content):
-   "Offensive Security", "OSINT & Recon", "Hardware & SDR", "AI / ML",
+   "Offensive Security", "OSINT & Recon", "Hardware & SDR", "AI News", "AI / ML",
    "Linux & Homelab", "Finance", "DIY & Self-Reliance".
+
+   AI ROUTING - these two are distinct, do not merge them:
+   - "AI News"  = the industry moving. Model releases and version bumps, lab
+     announcements, leaks and rumors of unreleased models, benchmark results,
+     funding/acquisition/personnel news, product launches, licensing and policy
+     changes, capability claims. Anything time-sensitive where being a day late
+     makes it stale.
+   - "AI / ML"  = the field advancing. Papers, architectures, training methods,
+     model internals and interpretability, evaluation methodology, prompt and
+     agent engineering technique, reproducible experiments. Durable material
+     that is still worth reading next month.
+   A new model's LAUNCH is "AI News"; a teardown of HOW it works is "AI / ML".
+   AI security and red-teaming stay in "Offensive Security" when the article is
+   primarily an attack technique, exploit, or vulnerability writeup.
+
 2. Each feature gets exactly 3 bullets. Bullets are dense and factual: the mechanism,
    the data/outcome, and why it matters now. No filler verbs, no "in this article".
    Lead with the concrete noun. Target <= 20 words per bullet.
