@@ -1,12 +1,15 @@
 """
 Stage 4 — Automated Gist Dispatch (The Delivery)
 
-PATCHes the briefing AND the feed health report into the target Gist:
+PATCHes the briefing, the feed health report AND the cross-run seen-set into
+the target Gist:
   - briefing.json                -> latest day (dashboard opens this by default)
   - briefing-YYYY-MM-DD.json     -> dated archive copy, so past days stay browsable
   - feedreport.json              -> latest feed health snapshot
   - feedreport-YYYY-MM-DD.json   -> dated archive, so the dashboard can diff days
                                     and show which sources went dark / recovered
+  - seen_urls.json               -> article ids already published, so a 48h
+                                    lookback on a 24h schedule cannot republish
 
 The report published here is a SLIM copy: ingest.py's feed_report.json embeds every
 article it collected, which would bloat the Gist. We strip `items` and keep only
@@ -24,6 +27,8 @@ import re
 from pathlib import Path
 
 import requests
+
+import seen as seen_store
 
 HERE = Path(__file__).parent
 BRIEFING = HERE / "briefing.json"
@@ -89,6 +94,12 @@ def main() -> None:
         LATEST_FILENAME: {"content": content},
         f"briefing-{date}.json": {"content": content},
     }
+
+    # Cross-run dedupe state. ingest.py already merged + pruned it; this just
+    # rides along in the PATCH below, costing ZERO extra API calls.
+    seen_payload = seen_store.build_gist_payload()
+    if seen_payload:
+        files[seen_payload[0]] = {"content": seen_payload[1]}
 
     report = _slim_report(date)
     if report:

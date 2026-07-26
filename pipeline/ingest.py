@@ -26,6 +26,8 @@ from urllib.parse import urljoin, urlparse
 import feedparser
 import requests
 
+import seen as seen_store
+
 HERE = Path(__file__).parent
 FEEDS_FILE = HERE / "feeds.txt"
 OUT_FILE = HERE / "raw_articles.json"
@@ -336,7 +338,8 @@ def parse_feed(url: str, cutoff: dt.datetime) -> dict:
     return rec
 
 
-def write_report(records: list[dict], kept_after_dedupe: int) -> None:
+def write_report(records: list[dict], kept_after_dedupe: int,
+                 cross_run_suppressed: int = 0) -> None:
     counts = Counter(r["status"] for r in records)
     failures = [r for r in records if r["status"] in FAILING]
     failures.sort(key=lambda r: (r["status"], r["source"]))
@@ -348,6 +351,7 @@ def write_report(records: list[dict], kept_after_dedupe: int) -> None:
         "allowlist_mode": ALLOWLIST_MODE,
         "totals": {"sources": len(records),
                    "articles_kept": kept_after_dedupe,
+                   "cross_run_suppressed": cross_run_suppressed,
                    **{k: v for k, v in sorted(counts.items())}},
         "sources": records,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -356,7 +360,9 @@ def write_report(records: list[dict], kept_after_dedupe: int) -> None:
              f"- Sources checked: **{len(records)}**",
              f"- Producing articles: **{counts.get('OK', 0)}**",
              f"- Not contributing: **{len(failures)}**",
-             f"- Unique articles after dedupe: **{kept_after_dedupe}**", ""]
+             f"- Unique articles after dedupe: **{kept_after_dedupe}**",
+             (f"- Suppressed as already published: **{cross_run_suppressed}**"
+              if cross_run_suppressed else ""), ""]
     if failures:
         lines += ["## Sources contributing nothing", "",
                   "| Source | Status | What it means | Detail |",
@@ -409,9 +415,32 @@ def main() -> None:
             per_source[it["source"]] += 1
             deduped.append(it)
 
+    # ---- cross-run dedupe -------------------------------------------------
+    # LOOKBACK_HOURS (48) is twice the run interval (24h), so every article
+    # falls inside two consecutive windows. The per-source/per-title dedupe
+    # above only sees ONE run, so without this every story would be scored and
+    # published twice. Best-effort: if the Gist is unreachable, `previously` is
+    # empty and the run proceeds with duplicates rather than failing.
+    seen_state = seen_store.fetch_seen()
+    previously = seen_store.seen_ids(seen_state)
+    if previously:
+        before = len(deduped)
+        deduped = [it for it in deduped if it["id"] not in previously]
+        suppressed = before - len(deduped)
+        print(f"[ingest] cross-run dedupe: {suppressed} already-published "
+              f"article(s) suppressed ({len(previously)} ids known)", flush=True)
+    else:
+        suppressed = 0
+
     OUT_FILE.write_text(json.dumps(deduped, indent=2, ensure_ascii=False),
                         encoding="utf-8")
-    write_report(records, len(deduped))
+
+    # Stage the merged next state for dispatch.py. Only ids that survived to
+    # raw_articles.json are recorded — those are the ones that cost LLM budget.
+    seen_store.write_pending(seen_state, [it["id"] for it in deduped],
+                             dt.date.today().isoformat())
+
+    write_report(records, len(deduped), suppressed)
 
     counts = Counter(r["status"] for r in records)
     ok = counts.get("OK", 0)
