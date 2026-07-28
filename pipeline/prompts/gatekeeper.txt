@@ -25,7 +25,17 @@ DOMAINS (label = editor category; score against the best-matching one):
 
 Content matching no domain scores 0-2 regardless of quality.
 
-SCORING — calibrate so roughly 20% of a batch reaches 7+:
+PRIORITY (relevance weighting — distinct from the quality score below):
+- CORE: AI News, Offensive Security, AI / ML. The operator's daily focus.
+- SECONDARY: OSINT & Recon, Hardware & SDR, Linux & Homelab, Finance, World News,
+  DIY & Self-Reliance. In scope and still promoted, but must clear a higher bar to
+  reach "feature" (see TIERS).
+Priority is about TOPIC relevance only. It never changes the 0-10 quality score and
+never overrides OBJECTIVITY: a secondary-domain story reported from primary sources
+still scores on its merits — it simply needs a stronger score to feature.
+
+SCORING — calibrate so roughly 20% of a batch reaches 7+. This anchors the 0-10
+quality scale; tier promotion is priority-gated (see TIERS).
 9-10  Primary-source depth in any domain: new CVE with PoC, novel malware analysis,
       confirmed major model release, breaking conflict or policy event with documents.
 7-8   Strong technical work or original reporting; substantive paper; authoritative
@@ -36,13 +46,20 @@ SCORING — calibrate so roughly 20% of a batch reaches 7+:
 3-4   Thin: light commentary, mostly-known material, no new facts or sources.
 0-2   Off-domain, contentless PR, SEO filler, pure opinion carrying no reporting.
 
-TIERS: score >=7 -> "feature" | 5-6 -> "notable" | <=4 -> "reject"
+TIERS (priority-gated — same 0-10 score, different promotion bar):
+- CORE domains:      score >=7 -> "feature" | 5-6 -> "notable" | <=4 -> "reject"
+- SECONDARY domains: score >=8 -> "feature" | 5-7 -> "notable" | <=4 -> "reject"
 
 OVERRIDES:
 - BREAKING FLOOR: a first report of a model release, an actively exploited
   vulnerability, a named ongoing attack or scam campaign, or a major geopolitical or
   market event scores >=5 even when the writeup is brief. Never reject a genuinely
   new event for thinness alone.
+- MARKETING: a post whose main purpose is to promote a product or service — feature
+  announcements, "how our platform stops X", sponsored threat write-ups with no
+  reproducible detail — caps at "notable". Lift the cap only when it carries original,
+  reproducible research: real IOCs, a novel technique, or concrete CVE/exploit detail.
+  Judge substance, not the publisher; independent research from a vendor scores on merit.
 - DUPLICATES: when several articles cover one event, score the most original or
   primary account highest and mark derivatives down one band. Do not zero them.
 - RECENCY: articles may be up to 48h old. Age alone is not a penalty; being
