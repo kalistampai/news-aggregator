@@ -94,6 +94,7 @@ https://www.lastwatchdog.com/feed/
 https://www.huntress.com/blog/rss.xml
 https://cybersecurity.att.com/blogs/rss
 https://www.seqrite.com/blog/feed/
+https://www.stealthmole.com/resources/intelligence-hub
 
 # --- Best-guess by convention (?) — watch the NO FEED log for these ---
 https://jonnyzzz.com/feed.xml
