@@ -1,4 +1,3 @@
-# DISPATCH feed list — one URL per line. Blank lines and # comments are ignored.
 # Inline comments are also stripped, so "https://x.com/feed  # note" is valid.
 #
 # All entries are DIRECT feed URLs (not homepages), so ingest.py matches on the
@@ -16,7 +15,7 @@
 # expected. Only CAPTCHA / 4xx / 5xx / DNS / NO_FEED are real problems. Never
 # prune a feed for being STALE — that is exactly when its next post matters.
 #
-# Current count: 155 active sources.  118 - 2 (hard failures) + 39 (AI news).
+# Current count: 158 active sources.  118 - 2 (hard failures) + 39 (AI news) + 3 (Substack additions).
 # Keep this number in sync when editing: a stale count in this header once
 # caused a false "63 feeds vanished" alarm when it disagreed with the run log.
 
@@ -149,6 +148,9 @@ https://www.aisnakeoil.com/feed
 https://www.oneusefulthing.org/feed
 https://tldr.tech/api/rss/ai   # (?) daily digest
 https://simonwillison.net/atom/everything/
+https://dankornas.substack.com/feed
+https://ruben.substack.com/feed
+https://ziegler.substack.com/feed
 
 # -- Frontier labs: official announcements (releases land here FIRST) --
 https://openai.com/news/rss.xml   # (?)
@@ -207,4 +209,3 @@ https://www.clubic.com/feed/news.rss
 # https://unlimitedhangout.com/feed/   # removed: exact duplicate
 https://www.thefp.com/feed   # (?) best-guess; was https://www.thefp.com/
 https://www.404media.co/rss/
-
