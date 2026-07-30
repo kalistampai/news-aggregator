@@ -140,7 +140,7 @@ https://www.mitnicksecurity.com/blog/rss.xml
 
 # -- Newsletters & analysis (the lastweekin.ai tier) --
 https://lastweekin.ai/feed
-https://importai.substack.com/feed
+https://research.openanalysis.net/feed.xml
 https://www.deeplearning.ai/the-batch/feed/
 https://magazine.sebastianraschka.com/feed
 https://www.interconnects.ai/feed
