@@ -157,7 +157,22 @@ an unrecognised shape is printed rather than silently dropped.
 Cross-run dedupe marks an article published as soon as it survives ingest, so a bad
 run "spends" its articles. To rebuild that day, run the workflow manually with the
 **"Recovery: re-ingest articles already marked published"** checkbox ticked — it
-sets `CROSS_RUN_DEDUPE=0` for that run only.
+sets `CROSS_RUN_DEDUPE=0` for that run only. Confirm it applied by looking for
+`[seen] cross-run dedupe DISABLED` in the log, or `cross_run_suppressed: 0` in the
+feed report — a recovery run that silently kept dedupe on scores the handful of
+leftovers and looks like a scoring failure.
+
+### Sections safety net
+A briefing with notable items but no feature-tier cards renders as a bare link strip
+with no sections — correct scoring, but it reads as broken. When nothing clears the
+feature bar, the gatekeeper promotes the highest-scoring notable items
+(`PROMOTE_MIN_SCORE`, default 6; at most `PROMOTE_MAX`, default 6) and says so in the
+log. `PROMOTE_ON_EMPTY=0` restores strict tiering and accepts a section-less day.
+
+This exists because tier promotion is a *ratio* judgement — the prompt asks the model
+to calibrate so ~20% of a batch reaches 7+ — and a small or weak article pool can
+legitimately produce zero. On 2026-08-02 a 17-article pool (the rest suppressed by
+dedupe) topped out at a single 7, which is a real outcome, not a bug.
 
 Simulate the whole chain without touching the API — no key or network needed:
 

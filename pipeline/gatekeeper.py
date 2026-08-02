@@ -43,6 +43,15 @@ STRICT = os.environ.get("GATEKEEPER_STRICT", "").lower() in ("1", "true", "yes")
 # Allow publishing a briefing with no items (a genuinely empty day).
 EMPTY_OK = os.environ.get("EMPTY_OK", "").lower() in ("1", "true", "yes")
 
+# SECTIONS SAFETY NET. A briefing with notable items but zero feature-tier cards
+# renders as a bare link strip with no sections, which reads as broken even when
+# the scoring was correct — it just means nothing cleared the promotion bar that
+# day. Rather than show that at 06:17, promote the highest-scoring notable items.
+# Set PROMOTE_ON_EMPTY=0 to keep the strict tiering and accept a section-less day.
+PROMOTE_ON_EMPTY = os.environ.get("PROMOTE_ON_EMPTY", "1").lower() in ("1", "true", "yes")
+PROMOTE_MIN_SCORE = int(os.environ.get("PROMOTE_MIN_SCORE", "6"))
+PROMOTE_MAX = int(os.environ.get("PROMOTE_MAX", "6"))
+
 
 class EmptyScoringError(RuntimeError):
     """Scoring produced nothing publishable — abort before overwriting the Gist."""
@@ -182,6 +191,21 @@ def main() -> None:
     notable = [a for a in scored if a["tier"] == "notable"]
     features.sort(key=lambda a: a["score"], reverse=True)
     notable.sort(key=lambda a: a["score"], reverse=True)
+
+    # No article cleared the feature bar. Promote the best of the notable tier so
+    # the briefing still has sections — logged, never silent.
+    if not features and notable and PROMOTE_ON_EMPTY:
+        promoted = [a for a in notable if a["score"] >= PROMOTE_MIN_SCORE][:PROMOTE_MAX]
+        if promoted:
+            for a in promoted:
+                a["tier"] = "feature"
+                a["promoted"] = True
+            features = promoted
+            notable = [a for a in notable if not a.get("promoted")]
+            print(f"[gatekeeper] no article reached feature tier; promoting the "
+                  f"{len(promoted)} highest-scoring notable item(s) "
+                  f"(score >= {PROMOTE_MIN_SCORE}) so the briefing has sections. "
+                  f"Set PROMOTE_ON_EMPTY=0 to disable.", flush=True)
 
     # ZERO-YIELD GUARD. 130 articles in and nothing out is not a quiet news day,
     # it is a broken response contract — and continuing publishes a blank page

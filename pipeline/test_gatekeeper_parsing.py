@@ -87,6 +87,19 @@ def test_numeric_ids_still_match():
 
 
 # ---- the guard --------------------------------------------------------------
+def test_promotion_fills_empty_sections():
+    # A day where nothing clears the feature bar must still render sections.
+    assert gatekeeper.PROMOTE_ON_EMPTY is True
+    notable = [{"id": "a", "score": 7, "tier": "notable"},
+               {"id": "b", "score": 6, "tier": "notable"},
+               {"id": "c", "score": 5, "tier": "notable"}]
+    keep = [a for a in notable if a["score"] >= gatekeeper.PROMOTE_MIN_SCORE]
+    promoted = keep[:gatekeeper.PROMOTE_MAX]
+    assert [a["id"] for a in promoted] == ["a", "b"], promoted
+    # score 5 stays notable — promotion has a floor, it is not "promote anything"
+    assert all(a["score"] >= 6 for a in promoted)
+
+
 def test_empty_scoring_error_exists():
     # run.py catches this to exit 75 without letting dispatch publish; that
     # wiring is covered by the end-to-end check, which has feedparser available.

@@ -74,8 +74,12 @@ def _empty() -> dict:
 def fetch_seen() -> dict:
     """Read the seen-set from the Gist. Returns an empty structure on any failure."""
     if not ENABLED:
-        print("[seen] cross-run dedupe disabled (CROSS_RUN_DEDUPE=0)", flush=True)
+        print("[seen] cross-run dedupe DISABLED (CROSS_RUN_DEDUPE=0) — "
+              "already-published articles will be re-ingested", flush=True)
         return _empty()
+    # Stated either way: "did the recovery switch actually apply?" is otherwise
+    # only answerable by counting suppressed articles in the feed report.
+    print("[seen] cross-run dedupe ENABLED (CROSS_RUN_DEDUPE=1)", flush=True)
 
     gist_id = os.environ.get("GIST_ID")
     headers = _headers()
