@@ -1,3 +1,4 @@
-google-genai
+openai>=1.66          # primary provider (Responses API needs >=1.66)
+google-genai          # last-resort fallback provider — keep installed
 feedparser>=6.0
 requests>=2.31

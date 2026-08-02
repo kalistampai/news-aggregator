@@ -22,9 +22,9 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=2026-07-26a" />
+  <link rel="stylesheet" href="style.css?v=2026-08-02a" />
 </head>
-<body data-build="2026-07-26a">
+<body data-build="2026-08-02a">
   <div class="scanline" aria-hidden="true"></div>
 
   <header class="masthead">
@@ -32,6 +32,13 @@
       <h1 class="wordmark">DISPATCH<span class="wordmark__cursor">_</span></h1>
       <div class="masthead__meta">
         <span class="tag" id="statusTag">BOOTING</span>
+        <!-- Dual-purpose status line: busy text while a fetch is in flight,
+             "via <model-id>" once idle. The model shown is the one that ACTUALLY
+             produced the briefing (recorded by the pipeline after a successful
+             response), which is not necessarily the one configured in the
+             workflow — they differ exactly when a failover happened. -->
+        <span class="modeltag" id="modelTag" data-state="busy"
+              title="Model status">working…</span>
         <span class="flag" id="archiveFlag" hidden>ARCHIVED</span>
         <time class="stamp" id="dateStamp">—</time>
       </div>
@@ -186,6 +193,6 @@
     <span id="footerNote">DISPATCH · If you don't read the news, you're uninformed. If you read the news, you're mis-informed.</span>
   </footer>
 
-  <script src="script.js?v=2026-07-26a"></script>
+  <script src="script.js?v=2026-08-02a"></script>
 </body>
 </html>

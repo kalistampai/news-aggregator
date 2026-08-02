@@ -27,7 +27,7 @@ const CONFIG = {
    <body data-build>. A mismatch means one of the two files is stale — usually a
    cached script.js on GitHub Pages — which is exactly how a removed control ends
    up referenced by old code and throws "Cannot set properties of null". */
-const BUILD = "2026-07-26a";
+const BUILD = "2026-08-02a";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -98,6 +98,123 @@ function savePrefs(patch) {
     const next = { ...loadPrefs(), ...patch };
     localStorage.setItem(PREF_KEY, JSON.stringify(next));
   } catch (_) { /* storage unavailable — preferences just won't persist */ }
+}
+
+/* --------------------------- model attribution --------------------------- */
+/* WHICH MODEL ACTUALLY RAN — not which one is configured.
+   editor.py writes briefing.models.{editor,gatekeeper} AFTER a successful
+   response, so `effective` names the model that produced the cards on screen.
+   It differs from `configured` exactly when the pipeline failed over, which is
+   the moment this label earns its keep.
+
+   DISPLAY ONLY. MODEL_LABEL and the localStorage copy below are never read by
+   anything that decides what to call: routing lives in pipeline/llm.py and is
+   session-only (in-memory), so a model that was merely busy yesterday is still
+   tried FIRST on the next run. Persisting the display value here is what keeps
+   the label truthful across a reload — including a reload that cannot reach
+   the Gist at all. */
+const MODEL_KEY = "dispatch.model.v1";
+let MODEL_LABEL = null;     // what the label currently shows
+let MODEL_STORED = null;    // last value read from / written to localStorage
+
+/* Read once and keep it in memory: render() runs on every keystroke in the
+   search box, and storage access there would be pure waste. */
+function loadModelLabel() {
+  try {
+    const raw = localStorage.getItem(MODEL_KEY);
+    const v = raw ? JSON.parse(raw) : null;
+    MODEL_STORED = v && typeof v === "object" && v.model ? v : null;
+  } catch (_) { MODEL_STORED = null; }
+  return MODEL_STORED;
+}
+
+function saveModelLabel(info) {
+  if (MODEL_STORED && MODEL_STORED.model === info.model &&
+      MODEL_STORED.date === info.date) return;          // unchanged
+  MODEL_STORED = info;
+  try { localStorage.setItem(MODEL_KEY, JSON.stringify(info)); }
+  catch (_) { /* storage unavailable — the label just won't survive a reload */ }
+}
+
+/* Pull the attribution out of a briefing. Returns null for briefings archived
+   before the pipeline recorded it. */
+function modelInfoOf(data) {
+  const m = data && data.models;
+  const ed = m && m.editor;
+  if (!ed || !ed.effective) return null;
+  const gk = (m.gatekeeper || {});
+  // `primary` is the first-choice id AFTER the pipeline resolved it against the
+  // provider's real model list, so a configured family name that resolved to a
+  // concrete id is not mistaken for a failover. Older briefings carry only
+  // `configured`, hence the fallback comparison.
+  const first = ed.primary || ed.configured || ed.effective;
+  return {
+    model: ed.effective,
+    configured: ed.configured || ed.effective,
+    primary: first,
+    fellBack: typeof ed.fell_back === "boolean"
+      ? ed.fell_back
+      : first !== ed.effective,
+    gatekeeper: gk.effective || null,
+    gatekeeperConfigured: gk.primary || gk.configured || null,
+    alerts: Array.isArray(m.alerts) ? m.alerts.slice(0, 4) : [],
+    events: Array.isArray(m.events) ? m.events.slice(0, 6) : [],
+    date: data.date || "",
+  };
+}
+
+/* ONE element, two jobs (the masthead already had a status tag; this is its
+   sibling for model state): busy text while a fetch is in flight, the model
+   label the rest of the time. */
+function setModelBusy(text) {
+  const node = el("#modelTag");
+  node.textContent = text || "working…";
+  node.dataset.state = "busy";
+  node.title = "Fetching the briefing — the model that produced it is shown here " +
+               "once it loads.";
+}
+
+function renderModelTag(info, { stale = false } = {}) {
+  const node = el("#modelTag");
+  if (!info) {
+    node.textContent = "model not recorded";
+    node.dataset.state = "unknown";
+    node.title = "This briefing was archived before the pipeline recorded which " +
+                 "model answered. Newer days show the model that produced them.";
+    return;
+  }
+  MODEL_LABEL = info;
+  const alerted = (info.alerts || []).length > 0;
+  node.textContent = `via ${info.model}` +
+    (info.fellBack ? " (fallback)" : "") + (alerted ? " ⚠" : "");
+  // An alert outranks everything else: the briefing shipped, but something in
+  // the chain is broken and will stay broken until someone fixes it.
+  node.dataset.state = alerted ? "alert"
+    : stale ? "stale" : (info.fellBack ? "fallback" : "ok");
+
+  const lines = [];
+  if (alerted) lines.push("ACTION NEEDED:", ...info.alerts, "");
+  lines.push(
+    `Briefing written by: ${info.model}`,
+    `First choice this run: ${info.primary || info.configured}` +
+      (info.configured && info.primary && info.configured !== info.primary
+        ? ` (configured as ${info.configured})` : ""),
+    info.fellBack
+      ? `FAILED OVER — ${info.primary || info.configured} was unavailable, so ` +
+        `${info.model} produced this output.`
+      : "No failover: the first-choice model answered.",
+  );
+  if (info.gatekeeper) {
+    lines.push(`Scoring (gatekeeper): ${info.gatekeeper}` +
+      (info.gatekeeperConfigured && info.gatekeeperConfigured !== info.gatekeeper
+        ? ` (configured: ${info.gatekeeperConfigured})` : ""));
+  }
+  if (info.events.length) lines.push("", ...info.events);
+  if (stale) {
+    lines.push("", `Last known value, from ${info.date || "an earlier visit"} — ` +
+                   "this page could not load a fresh briefing.");
+  }
+  node.title = lines.join("\n");
 }
 
 /* ------------------------------- time ------------------------------------ */
@@ -1011,6 +1128,17 @@ function render(data, filterRes) {
   el("#notableCount").textContent = notable.length;
   el("#catCount").textContent = catNames.length;
 
+  /* Which model produced THIS day. Persisted only for the latest day: the
+     stored value describes the current output, not whichever archived day the
+     reader happens to have open. */
+  const cached = MODEL_STORED;
+  let modelInfo = modelInfoOf(data);
+  if (!modelInfo && cached && cached.date && cached.date === (data.date || "")) {
+    modelInfo = cached;             // same day, recorded on an earlier visit
+  }
+  renderModelTag(modelInfo);
+  if (modelInfo && currentIndex === 0) saveModelLabel(modelInfo);
+
   const gen = el("#genStamp");
   if (data.generated_at) {
     gen.textContent = "compiled " + fmtPacific(data.generated_at);
@@ -1032,6 +1160,15 @@ function renderError(msg) {
   tag.textContent = "OFFLINE"; tag.dataset.state = "error";
   board.innerHTML =
     `<div class="state state--error"><p>${escapeHtml(msg)}</p></div>`;
+
+  // The label must never be left spinning on "working…". With nothing loaded,
+  // the persisted value is the only truthful thing we have — shown as stale.
+  const last = MODEL_STORED;
+  if (last) { renderModelTag(last, { stale: true }); return; }
+  const node = el("#modelTag");
+  node.textContent = "model unknown";
+  node.dataset.state = "unknown";
+  node.title = "No briefing loaded, and no model recorded from an earlier visit.";
 }
 
 function escapeHtml(s) {
@@ -1075,6 +1212,8 @@ function checkAssetVersions() {
 /* --------------------------------- boot ---------------------------------- */
 (async function boot() {
   checkAssetVersions();
+  loadModelLabel();                     // last known model, for the offline path
+  setModelBusy("fetching briefing…");   // idle state is set by render()/renderError()
 
   // restore preferences before the first render
   const prefs = loadPrefs();

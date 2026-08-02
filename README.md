@@ -6,9 +6,9 @@ briefing, and pushes the result to a GitHub Gist. A static GitHub Pages dashboar
 that Gist. **No server, no SMTP, no database.**
 
 ```
-feeds.txt ─► ingest ─► gatekeeper (Gemini Flash-Lite) ─► editor (Gemini Flash) ─► dispatch ─► Gist
-                                                                                    │
-                                                             GitHub Pages dashboard ┘ (reads raw JSON)
+feeds.txt ─► ingest ─► gatekeeper (GPT-5.6) ─► editor (GPT-5.6) ─► dispatch ─► Gist
+                                                                      │
+                                               GitHub Pages dashboard ┘ (reads raw JSON)
 ```
 
 ## Layout
@@ -21,7 +21,8 @@ news-aggregator/
 │   ├── gatekeeper.py             # stage 2: batched relevance scoring + tiering
 │   ├── editor.py                 # stage 3: batched synthesis + URL re-attach
 │   ├── dispatch.py               # stage 4: PATCH the Gist
-│   ├── llm.py                    # shared Google Gemini client (retries + model failover)
+│   ├── llm.py                    # shared model client (OpenAI + Gemini, retries, failover)
+│   ├── test_llm_fallback.py      # offline simulation of the failover chain
 │   ├── run.py                    # orchestrator (runs 1→4)
 │   ├── prompts/{gatekeeper,editor}.txt
 │   └── requirements.txt
@@ -30,17 +31,103 @@ news-aggregator/
 ```
 
 ## Models
-The pipeline runs on **Google Gemini** (largest free tier). Defaults, overridable via env:
+The pipeline runs on **OpenAI GPT-5.6**, with **Google Gemini** as the last-resort
+fallback. Every model id is provider-prefixed (`openai:` / `gemini:`), so one ordered
+list can cross providers and the whole chain stays a single code path. An unprefixed id
+is inferred from its name (`gpt-*` → OpenAI, `gemini-*` → Gemini).
 
-- `GATEKEEPER_MODEL` — `gemini-3.1-flash-lite` (GA; cheap, high-volume scoring)
-- `EDITOR_MODEL` — `gemini-3.5-flash` (GA; synthesis)
-- `EDITOR_FALLBACK_MODELS` — comma-separated list; the editor fails over to these, in
-  order, if the primary model is transiently unavailable (503 / overload). Defaults to
-  the gatekeeper model, which is already exercised each run and therefore known-reachable.
+- `GATEKEEPER_MODEL` / `EDITOR_MODEL` — first choice per stage. Default
+  `openai:gpt-5.6-sol`.
+- `GATEKEEPER_FALLBACK_MODELS` / `EDITOR_FALLBACK_MODELS` — comma-separated, tried in
+  order. Default `openai:gpt-5.6-terra,openai:gpt-5.6-luna,gemini:…`.
 
-Newer GA alternatives exist if you want to swap: `gemini-3.6-flash` (cheaper and more
-token-efficient than 3.5 Flash) or `gemini-3.5-flash-lite` (newest low-cost lite tier).
-Just change the env vars.
+**The Gemini entry at the end is load-bearing.** This job runs at 06:17 Pacific with
+nobody awake: if `OPENAI_API_KEY` is unset, the credit runs dry, or a model id turns out
+to be wrong, the chain walks past OpenAI and Gemini still writes the briefing. Keep
+`GEMINI_API_KEY` set and `google-genai` installed even while testing on OpenAI.
+
+Model ids are verified against `/v1/models` once per run (`LLM_RESOLVE_MODELS=1`), so a
+family name that needs a dated snapshot id is corrected and logged rather than 404-ing
+every call all night. Set it to `0` to use the ids exactly as written.
+
+### Cost
+List price per 1M tokens: **Sol $5 in / $30 out**, **Terra $2.50 / $15**, **Luna $1 / $6**.
+A run makes roughly one gatekeeper call per 30 articles (~50) plus one editor call per
+20 feature-tier articles (~6), so ~60–70 calls before retries — on the order of **$3–4 a
+morning with Sol on both stages**, i.e. about two weeks on $50.
+
+To stretch it, point the *gatekeeper* at `openai:gpt-5.6-luna`: it is ~90% of the calls,
+and the writing you actually read comes from the editor. Both stages currently lead with
+Sol, as configured.
+
+GPT-5.6 is a reasoning family, which has two consequences the pipeline handles
+explicitly: reasoning tokens are billed as output tokens, and they come out of the same
+budget as the answer. `OPENAI_REASONING_EFFORT` (default `low`) keeps deliberation
+proportional to the task, and `OPENAI_TOKEN_HEADROOM` (default `4000`) is added on top of
+each stage's `max_tokens` so a long think cannot truncate the JSON.
+
+### Which model actually ran
+The configured model and the model that produced the briefing are **not** the same thing
+whenever a failover happens — which is exactly when you want to know. After each
+successful response `llm.py` records the model that answered; `editor.py` writes it into
+`briefing.json` under `models`, and the dashboard shows it in the masthead as
+`via <model-id>` (amber, marked `(fallback)`, when it differs from the configured one).
+The tooltip carries the configured model, the gatekeeper's model, and the failover log.
+
+```json
+"models": {
+  "editor":     {"configured": "gemini-3.5-flash", "effective": "gemini-3.1-flash-lite",
+                 "counts": {"gemini-3.1-flash-lite": 6}, "fell_back": true},
+  "gatekeeper": {"configured": "gemini-3.1-flash-lite", "effective": "gemini-3.1-flash-lite",
+                 "counts": {"gemini-3.1-flash-lite": 12}, "fell_back": false},
+  "events": ["gemini-3.5-flash is overloaded (503) — trying the next: gemini-3.1-flash-lite"]
+}
+```
+
+This value is **display only**. Nothing reads it back to decide what to call: routing
+always restarts from the configured model, so a model that was merely busy today is
+still tried first tomorrow. The dashboard mirrors it to `localStorage`
+(`dispatch.model.v1`) so the label still describes the output after a reload — including
+a reload that can't reach the Gist, where it is shown dimmed as the last known value.
+
+### Failure handling
+`llm.py` sorts every error into one of three buckets, by HTTP status first and message
+text only as a fallback:
+
+| Bucket | Examples | Behaviour |
+| --- | --- | --- |
+| **busy** | 5xx, `overloaded`, `try again later`, timeouts, dropped connections | retry with backoff, then fail over to the next model — printed, never silent |
+| **soft** | empty / truncated / non-JSON / safety-blocked output | retry the same model, then fail over; never reported as an outage |
+| **unusable** | 401/403 bad key, 404 unknown model, exhausted credit | advance to the next candidate **and** raise an ACTION NEEDED alert. A key problem rules out that provider's other models immediately; an unknown id rules out only itself |
+| **fatal** | 400 malformed request | raised immediately — it fails identically on every model |
+
+Unattended runs favour shipping over stopping: an unusable provider is walked past, not
+died on, because at 06:17 nobody can fix a key. It is never *swallowed* — the reason is
+printed as `ACTION NEEDED`, stored in `briefing.json` under `models.alerts`, and turns
+the dashboard's model label red with a ⚠ until the next clean run.
+
+- Every failover prints `<model> is overloaded (503) — trying the next: <model>`.
+- When **every** candidate is busy, the run aborts with a distinct message saying the
+  condition is temporary and nothing was written (exit code 75). `dispatch.py` never
+  runs, so the Gist keeps the previous briefing. No model-discovery call is made on that
+  path — it would be a wasted round trip against an API that is already failing.
+- `LLM_BUSY_COOLDOWN` (default `120`s) keeps a model that just 503'd out of the rotation
+  for the rest of the run, so 20 batches don't each re-discover the same outage. It is
+  in-memory only — the next process starts clean.
+- `LLM_RETRY_429` (**default on**) treats a rate limit as *busy*: back off, then fail
+  over. An unattended run should ride out a quota spike rather than die on it. Set it to
+  `0` when debugging by hand to have 429s stop the run immediately. An OpenAI 429 that is
+  really `insufficient_quota` is detected by message and treated as *unusable* either
+  way — a dry account does not recover by waiting.
+- Pacing is per provider: `OPENAI_MIN_INTERVAL` (default `1`s) and `GEMINI_MIN_INTERVAL`
+  (default `13`s, which is 4.6 RPM — under the free tier's 5 RPM ceiling). `LLM_MIN_INTERVAL`
+  sets both at once.
+
+Simulate the whole chain without touching the API — no key or network needed:
+
+```
+cd pipeline && python test_llm_fallback.py
+```
 
 > Note: Gemini 3.x deprecates the `temperature` / `top_p` / `top_k` sampling params
 > (silently ignored on the newest models). `llm.py` no longer sends them — forced-JSON
@@ -50,16 +137,19 @@ Just change the env vars.
 1. **Create the Gist.** New secret Gist with a file `briefing.json` containing `{}`.
    Copy its ID (the hash in the URL).
 2. **Create a PAT** scoped to `gist` (classic) or fine-grained with Gist read/write.
-3. **Get a Gemini API key** from Google AI Studio (the free tier is sufficient).
-4. **Repo secrets** (Settings → Secrets → Actions): `GEMINI_API_KEY`,
-   `GH_GIST_TOKEN`, `GIST_ID`.
+3. **Get an OpenAI API key** (platform.openai.com) — the primary provider — and a
+   **Gemini API key** from Google AI Studio for the fallback (free tier is sufficient).
+4. **Repo secrets** (Settings → Secrets → Actions): `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+   `GH_GIST_TOKEN`, `GIST_ID`. A missing `OPENAI_API_KEY` does not break the run — it
+   falls through to Gemini and flags the dashboard — but it does mean you are not
+   testing what you think you are testing.
 5. **Dashboard config:** in `docs/script.js` set `CONFIG.GIST_ID` to your Gist ID.
 6. **Enable Pages:** Settings → Pages → deploy from branch → `main` / `/docs`.
 
 ## Run it
 - Manual: Actions tab → **daily-briefing** → *Run workflow*.
-- Local: `cd pipeline && pip install -r requirements.txt`, export the three env vars
-  (`GEMINI_API_KEY`, `GH_GIST_TOKEN`, `GIST_ID`), then `python run.py`. Intermediate
+- Local: `cd pipeline && pip install -r requirements.txt`, export the env vars
+  (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `GH_GIST_TOKEN`, `GIST_ID`), then `python run.py`. Intermediate
   artifacts (`raw_articles.json`, `scored_articles.json`, `briefing.json`) are written
   in place for inspection.
 
@@ -77,5 +167,7 @@ the comments in `daily.yml`.
 - **Resilience:** the editor synthesizes in batches and, if a batch can't be produced
   even after retries + fallback, emits minimal "degraded" cards so the briefing still
   ships. Set `EDITOR_STRICT=1` to instead abort the whole run on any unrecoverable
-  editor failure (leaving the previous day's briefing in the Gist).
+  editor failure (leaving the previous day's briefing in the Gist). Degrading applies
+  to *output* failures only: an all-models-busy outage or a fatal error aborts either
+  way, since degrading those would publish a gutted briefing over a good one.
 - **Feeds:** edit `feeds.txt`. Sources with no discoverable RSS are logged and skipped.

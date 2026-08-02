@@ -22,7 +22,7 @@
      does not match BUILD in script.js, the browser/CDN is serving a stale
      style.css and the page says so out loud instead of failing silently.
      Bump this together with ?v=, data-build, and BUILD. */
-  --build: "2026-07-26a";
+  --build: "2026-08-02a";
 }
 
 * { box-sizing: border-box; }
@@ -81,6 +81,32 @@ body {
   border-radius: 2px; text-transform: uppercase;
 }
 .stamp { font-family: var(--mono); font-size: .78rem; color: var(--ink-dim); letter-spacing: .04em; }
+
+/* "via <model-id>" — which model actually produced the briefing on screen.
+   Same element carries the busy text during a fetch, so the masthead never
+   grows or shifts between states. */
+.modeltag {
+  font-family: var(--mono); font-size: .66rem; letter-spacing: .06em;
+  padding: .24rem .5rem; border: 1px dashed var(--line); border-radius: 2px;
+  color: var(--ink-faint); white-space: nowrap; cursor: help;
+}
+.modeltag[data-state="ok"] { color: var(--ink-dim); border-color: var(--line); }
+/* The model that ran is NOT the configured one — the case worth noticing. */
+.modeltag[data-state="fallback"] {
+  color: var(--amber); border-color: var(--amber); border-style: solid;
+}
+/* The briefing shipped, but part of the chain needs a human (dead key, model
+   the account can't see). Loudest state — it does not fix itself. */
+.modeltag[data-state="alert"] {
+  color: var(--hot); border-color: var(--hot); border-style: solid;
+}
+/* Restored from localStorage, not yet confirmed by this page load. */
+.modeltag[data-state="stale"] { opacity: .55; }
+.modeltag[data-state="busy"] { animation: modelpulse 1.4s ease-in-out infinite; }
+@keyframes modelpulse { 50% { opacity: .4; } }
+@media (prefers-reduced-motion: reduce) {
+  .modeltag[data-state="busy"] { animation: none; }
+}
 
 .masthead__sub { margin: .5rem 0 0; color: var(--ink-dim); font-size: .92rem; }
 .masthead__sub a {
