@@ -276,18 +276,22 @@ def _candidates(model: str, fallback_models: list[str] | None) -> list[str]:
 
 
 # ---- display state (persisted downstream — NEVER read back into routing) ----
-_EFFECTIVE: dict[str, dict[str, int]] = {}   # requested model -> {answered: count}
-_PRIMARY: dict[str, str] = {}                # requested -> resolved first choice
+# Keyed by STAGE ("gatekeeper" / "editor"), not by model id. Keying by model id
+# silently merged the two stages whenever they were configured to the same model
+# — which made the editor's label claim a model that only the gatekeeper had
+# called. A stage that issued no successful request must report effective=None.
+_EFFECTIVE: dict[str, dict[str, int]] = {}   # stage -> {model answered: count}
+_PRIMARY: dict[str, str] = {}                # stage -> resolved first choice
 _EVENTS: list[str] = []                      # human-readable failover log
 _ALERTS: list[str] = []                      # things a human must fix
 _MAX_EVENTS = 40
 _display_lock = threading.Lock()
 
 
-def _record_success(requested: str, answered: str) -> None:
+def _record_success(stage: str, answered: str) -> None:
     with _display_lock:
-        _EFFECTIVE.setdefault(requested, {})
-        _EFFECTIVE[requested][answered] = _EFFECTIVE[requested].get(answered, 0) + 1
+        _EFFECTIVE.setdefault(stage, {})
+        _EFFECTIVE[stage][answered] = _EFFECTIVE[stage].get(answered, 0) + 1
 
 
 def _event(msg: str) -> None:
@@ -312,22 +316,23 @@ def alerts() -> list[str]:
         return list(_ALERTS)
 
 
-def stage_report(requested: str) -> dict:
-    """What actually answered for `requested` — the value the UI labels output with.
+def stage_report(stage: str, configured: str | None = None) -> dict:
+    """What actually answered for `stage` — the value the UI labels output with.
 
     `effective` is the model that answered the most calls for this stage, which
-    is the honest single-value answer when a run was split across a failover.
-    `primary` is the first-choice id after resolution, so `fell_back` stays False
-    when a configured family name simply resolved to a concrete snapshot id.
+    is the honest single-value answer when a run was split across a failover, and
+    None when the stage never got a successful response. `primary` is the
+    first-choice id after resolution, so `fell_back` stays False when a configured
+    family name simply resolved to a concrete snapshot id.
     """
     with _display_lock:
-        counts = dict(_EFFECTIVE.get(requested, {}))
-        primary = _PRIMARY.get(requested, requested)
+        counts = dict(_EFFECTIVE.get(stage, {}))
+        primary = _PRIMARY.get(stage, configured or stage)
         events = list(_EVENTS)
         alerted = list(_ALERTS)
     effective = max(counts, key=counts.get) if counts else None
     return {
-        "configured": requested,
+        "configured": configured or stage,
         "primary": primary,
         "effective": effective,
         "counts": counts,
@@ -795,7 +800,8 @@ def _complete_one_model(system_prompt: str, user_payload: str, model: str,
 
 
 def complete_json(system_prompt: str, user_payload: str, model: str,
-                  max_tokens: int = 8000, fallback_models: list[str] | None = None):
+                  max_tokens: int = 8000, fallback_models: list[str] | None = None,
+                  stage: str | None = None):
     """
     Call the model chain with forced-JSON output and return the parsed object.
 
@@ -808,12 +814,13 @@ def complete_json(system_prompt: str, user_payload: str, model: str,
       FatalLlmError   — a malformed request, or nothing left that can serve it.
       the original error — when the last candidate failed on unusable OUTPUT.
     """
+    key = stage or model                  # attribution bucket — see _EFFECTIVE
     candidates = _candidates(model, fallback_models)
     # The first CHOICE, not the first live candidate: if the preferred model is
     # skipped today, the label must still say the run fell back.
     primary = _resolve(model)
     with _display_lock:
-        _PRIMARY.setdefault(model, primary)
+        _PRIMARY.setdefault(key, primary)
 
     if not candidates:
         raise FatalLlmError(
@@ -836,7 +843,7 @@ def complete_json(system_prompt: str, user_payload: str, model: str,
             continue
         try:
             result = _complete_one_model(system_prompt, user_payload, m, max_tokens)
-            _record_success(model, m)          # DISPLAY ONLY — never routing
+            _record_success(key, m)            # DISPLAY ONLY — never routing
             if m != primary:
                 _event(f"{m} answered this request (first choice was {primary})")
             return result

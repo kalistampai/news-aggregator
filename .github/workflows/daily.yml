@@ -19,7 +19,19 @@ on:
     # Scheduled runs remain best-effort and can still be delayed under load —
     # if one is ever skipped entirely, use the "Run workflow" button below.
     - cron: "17 13 * * *"
-  workflow_dispatch:          # enables the manual "Run workflow" button
+
+  # Enables the manual "Run workflow" button (Actions -> daily-briefing -> right
+  # side). The checkbox is a RECOVERY switch: cross-run dedupe marks an article
+  # published as soon as it survives ingest, so if a run ships a broken or empty
+  # briefing, those articles are suppressed on the retry and the day cannot be
+  # rebuilt. Ticking this re-ingests everything inside the lookback window.
+  # Scheduled runs always keep dedupe ON.
+  workflow_dispatch:
+    inputs:
+      ignore_seen:
+        description: "Recovery: re-ingest articles already marked published"
+        type: boolean
+        default: false
 
 permissions:
   contents: write             # only for the keepalive commit (final step)
@@ -124,7 +136,9 @@ jobs:
           # keeps the ids already published in the Gist and ingest.py drops
           # them. Costs +1 authenticated GET/run (~0.06% of the 5000/hr limit)
           # and ~33 KB in the Gist. Set to "0" to disable and allow repeats.
-          CROSS_RUN_DEDUPE: "1"
+          # "1" on every scheduled run; "0" only when the recovery checkbox on a
+          # manual run is ticked. inputs.* is empty for schedule, so this is "1".
+          CROSS_RUN_DEDUPE: ${{ inputs.ignore_seen && '0' || '1' }}
           SEEN_RETENTION_DAYS: "7"   # must exceed LOOKBACK_HOURS/24, with margin
 
           # ---- summarization ceiling -------------------------------------

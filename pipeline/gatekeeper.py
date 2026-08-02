@@ -40,6 +40,12 @@ PROMPT = (HERE / "prompts" / "gatekeeper.txt").read_text(encoding="utf-8")
 # cheap to lose. Raise toward 50 to cut request count if you are RPD-constrained.
 BATCH_SIZE = int(os.environ.get("GATEKEEPER_BATCH_SIZE", "30"))
 STRICT = os.environ.get("GATEKEEPER_STRICT", "").lower() in ("1", "true", "yes")
+# Allow publishing a briefing with no items (a genuinely empty day).
+EMPTY_OK = os.environ.get("EMPTY_OK", "").lower() in ("1", "true", "yes")
+
+
+class EmptyScoringError(RuntimeError):
+    """Scoring produced nothing publishable — abort before overwriting the Gist."""
 # The chain (primary + ordered fallbacks, provider-prefixed) is defined in llm.py
 # so both stages and the workflow agree on one source of truth.
 FALLBACK_MODELS = GATEKEEPER_FALLBACK_MODELS
@@ -50,17 +56,67 @@ def _batched(seq, n):
         yield seq[i:i + n]
 
 
+_VERDICT_KEYS = ("verdicts", "articles", "results", "items", "scores", "data",
+                 "output", "response")
+
+
+def _looks_like_verdict(v) -> bool:
+    return isinstance(v, dict) and ("score" in v or "tier" in v)
+
+
 def _unwrap(verdicts):
-    """Models occasionally wrap the array in a dict — normalise to a list."""
-    if isinstance(verdicts, dict):
-        verdicts = (verdicts.get("verdicts") or verdicts.get("articles")
-                    or next(iter(verdicts.values()), []))
-    return verdicts if isinstance(verdicts, list) else []
+    """Normalise whatever wrapper the model used into a list of verdict dicts.
+
+    This is load-bearing, not defensive padding. OpenAI's JSON-object mode
+    CANNOT return a bare top-level array, so the response is always wrapped —
+    and the wrapper key is the model's choice. An unrecognised wrapper used to
+    yield an empty list, which scored zero articles and published an empty
+    briefing over a good one without a single error in the log.
+    """
+    if isinstance(verdicts, list):
+        return [v for v in verdicts if isinstance(v, dict)]
+    if not isinstance(verdicts, dict):
+        return []
+
+    for key in _VERDICT_KEYS:                       # the expected shape first
+        val = verdicts.get(key)
+        if isinstance(val, list):
+            return [v for v in val if isinstance(v, dict)]
+        if isinstance(val, dict):
+            return _unwrap(val)
+
+    if _looks_like_verdict(verdicts):               # a single bare verdict
+        return [verdicts]
+
+    for val in verdicts.values():                   # any list of verdicts
+        if isinstance(val, list) and any(_looks_like_verdict(v) for v in val):
+            return [v for v in val if isinstance(v, dict)]
+
+    # {"a1": {...}, "a2": {...}} — keyed by id, with the id only in the key.
+    if all(_looks_like_verdict(v) for v in verdicts.values()) and verdicts:
+        return [{"id": k, **v} for k, v in verdicts.items()]
+
+    for val in verdicts.values():                   # one level of nesting
+        if isinstance(val, dict):
+            found = _unwrap(val)
+            if found:
+                return found
+    return []
+
+
+def _shape_of(obj) -> str:
+    """One-line description of an unusable response, for the log."""
+    if isinstance(obj, dict):
+        return f"object with keys {sorted(obj)[:8]}"
+    if isinstance(obj, list):
+        kinds = {type(v).__name__ for v in obj[:5]}
+        return f"array of {len(obj)} ({', '.join(sorted(kinds)) or 'empty'})"
+    return type(obj).__name__
 
 
 def main() -> None:
     articles = json.loads(IN_FILE.read_text(encoding="utf-8"))
-    by_id = {a["id"]: a for a in articles}
+    by_id = {str(a["id"]): a for a in articles}   # str both sides — see below
     scored: list[dict] = []
     failed_batches = 0
 
@@ -75,9 +131,15 @@ def main() -> None:
             ensure_ascii=False,
         )
         try:
-            verdicts = _unwrap(complete_json(
-                PROMPT, payload, GATEKEEPER_MODEL,
-                max_tokens=8000, fallback_models=FALLBACK_MODELS))
+            raw = complete_json(
+                PROMPT, payload, GATEKEEPER_MODEL, max_tokens=8000,
+                fallback_models=FALLBACK_MODELS, stage="gatekeeper")
+            verdicts = _unwrap(raw)
+            if not verdicts:
+                # Parsed fine, carried nothing we recognise. Say what came back:
+                # a silent empty batch is how 130 articles became a blank page.
+                print(f"[gatekeeper] batch {n}/{len(batches)}: NO VERDICTS in a "
+                      f"valid response — {_shape_of(raw)}", flush=True)
         except ModelsBusyError as exc:
             # Temporary upstream outage, not a data problem. Abort before
             # anything is written so the published briefing stays as it was.
@@ -96,11 +158,14 @@ def main() -> None:
             continue
 
         matched = 0
+        unmatched_ids = []
         for v in verdicts:
             if not isinstance(v, dict):
                 continue
-            src = by_id.get(v.get("id"))
+            # str() both sides: a model that echoes "12" as 12 must still match.
+            src = by_id.get(str(v.get("id")))
             if not src:
+                unmatched_ids.append(v.get("id"))
                 continue
             matched += 1
             scored.append({**src,
@@ -109,14 +174,40 @@ def main() -> None:
                            "gatekeeper_reasoning": v.get("reasoning", "")})
 
         print(f"[gatekeeper] batch {n}/{len(batches)}: "
-              f"{matched}/{len(batch)} scored", flush=True)
+              f"{matched}/{len(batch)} scored"
+              + (f" | {len(unmatched_ids)} unknown id(s): "
+                 f"{unmatched_ids[:3]}" if unmatched_ids else ""), flush=True)
 
     features = [a for a in scored if a["tier"] == "feature"]
     notable = [a for a in scored if a["tier"] == "notable"]
     features.sort(key=lambda a: a["score"], reverse=True)
     notable.sort(key=lambda a: a["score"], reverse=True)
 
-    report = llm.stage_report(GATEKEEPER_MODEL)
+    # ZERO-YIELD GUARD. 130 articles in and nothing out is not a quiet news day,
+    # it is a broken response contract — and continuing publishes a blank page
+    # over yesterday's good briefing. Abort here instead: dispatch never runs and
+    # the Gist keeps what it has. EMPTY_OK=1 overrides for a genuine empty day.
+    if not articles:
+        # Ingest kept nothing — usually every candidate was already published in
+        # an earlier run today. There is nothing to publish, and writing an empty
+        # briefing would replace a good one. Re-run with CROSS_RUN_DEDUPE=0 (the
+        # "re-ingest already-published articles" checkbox) to recover a day.
+        raise EmptyScoringError(
+            "ingest produced no articles, so there is nothing to score or "
+            "publish. The existing briefing is left untouched.")
+    if articles and not scored:
+        raise EmptyScoringError(
+            f"{len(articles)} articles were sent to {GATEKEEPER_MODEL} and none "
+            f"came back scored. The model answered — the verdicts did not match "
+            f"the expected shape (see the NO VERDICTS / unknown id lines above). "
+            f"Nothing was written; the published briefing is untouched.")
+    if articles and not (features or notable) and not EMPTY_OK:
+        raise EmptyScoringError(
+            f"all {len(scored)} scored articles were rejected, so there is "
+            f"nothing to publish. Keeping the previous briefing rather than "
+            f"overwriting it with an empty one. Set EMPTY_OK=1 to publish anyway.")
+
+    report = llm.stage_report("gatekeeper", GATEKEEPER_MODEL)
     OUT_FILE.write_text(json.dumps(
         {"features": features, "notable": notable,
          "meta": {"gatekeeper_model": report}},

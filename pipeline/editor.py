@@ -75,7 +75,7 @@ def _synthesize(batch: list[dict], today: str) -> dict:
                       "why": a["gatekeeper_reasoning"]} for a in batch],
     }, ensure_ascii=False)
     result = complete_json(PROMPT, payload, EDITOR_MODEL, max_tokens=8000,
-                           fallback_models=EDITOR_FALLBACK_MODELS)
+                           fallback_models=EDITOR_FALLBACK_MODELS, stage="editor")
     cats = result.get("categories", {}) if isinstance(result, dict) else {}
     return cats if isinstance(cats, dict) else {}
 
@@ -90,9 +90,9 @@ def _model_block(gate_meta) -> dict:
     The gatekeeper's record is read from scored_articles.json when present, so
     this is correct whether the stages ran in one process (run.py) or separately.
     """
-    editor = llm.stage_report(EDITOR_MODEL)
+    editor = llm.stage_report("editor", EDITOR_MODEL)
     gate = (gate_meta if isinstance(gate_meta, dict) and gate_meta.get("configured")
-            else llm.stage_report(GATEKEEPER_MODEL))
+            else llm.stage_report("gatekeeper", GATEKEEPER_MODEL))
 
     def merged(key: str) -> list[str]:
         out: list[str] = []
@@ -192,6 +192,14 @@ def main() -> None:
           "score": a.get("score", 0), "tier": "notable"} for a in notable]
     )
     also_notable.sort(key=lambda a: a["score"], reverse=True)
+
+    # ZERO-YIELD GUARD, matching the gatekeeper's. Features went in, no cards
+    # came out: publishing that would replace a good briefing with a blank page.
+    if features and not categories:
+        raise RuntimeError(
+            f"{len(features)} feature-tier articles produced zero cards. Nothing "
+            f"was written; the published briefing is untouched. Check the batch "
+            f"lines above for the shape the model returned.")
 
     models = _model_block(data.get("meta", {}).get("gatekeeper_model")
                           if isinstance(data, dict) else None)

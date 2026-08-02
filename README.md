@@ -23,6 +23,7 @@ news-aggregator/
 │   ├── dispatch.py               # stage 4: PATCH the Gist
 │   ├── llm.py                    # shared model client (OpenAI + Gemini, retries, failover)
 │   ├── test_llm_fallback.py      # offline simulation of the failover chain
+│   ├── test_gatekeeper_parsing.py # verdict-shape + empty-briefing guard tests
 │   ├── run.py                    # orchestrator (runs 1→4)
 │   ├── prompts/{gatekeeper,editor}.txt
 │   └── requirements.txt
@@ -76,13 +77,25 @@ The tooltip carries the configured model, the gatekeeper's model, and the failov
 
 ```json
 "models": {
-  "editor":     {"configured": "gemini-3.5-flash", "effective": "gemini-3.1-flash-lite",
-                 "counts": {"gemini-3.1-flash-lite": 6}, "fell_back": true},
-  "gatekeeper": {"configured": "gemini-3.1-flash-lite", "effective": "gemini-3.1-flash-lite",
-                 "counts": {"gemini-3.1-flash-lite": 12}, "fell_back": false},
-  "events": ["gemini-3.5-flash is overloaded (503) — trying the next: gemini-3.1-flash-lite"]
+  "editor":     {"configured": "openai:gpt-5.6-sol", "primary": "openai:gpt-5.6-sol",
+                 "effective": "openai:gpt-5.6-terra",
+                 "counts": {"openai:gpt-5.6-terra": 6}, "fell_back": true},
+  "gatekeeper": {"configured": "openai:gpt-5.6-sol", "primary": "openai:gpt-5.6-sol",
+                 "effective": "openai:gpt-5.6-sol",
+                 "counts": {"openai:gpt-5.6-sol": 5}, "fell_back": false},
+  "events": ["openai:gpt-5.6-sol is overloaded (503) — trying the next: openai:gpt-5.6-terra"],
+  "alerts": []
 }
 ```
+
+The record is keyed by **stage**, not by model id. Keying it by model id merged the
+two stages whenever both were configured to the same model, and on 2026-08-02 that
+made an empty briefing claim `via openai:gpt-5.6-sol` — the gatekeeper's five calls,
+credited to an editor that never ran. A stage with no successful response now
+reports `effective: null`, and the dashboard says "model not recorded".
+
+`primary` is the first choice *after* id resolution, so a family name that resolved
+to a dated snapshot is not mistaken for a failover.
 
 This value is **display only**. Nothing reads it back to decide what to call: routing
 always restarts from the configured model, so a model that was merely busy today is
@@ -123,10 +136,34 @@ the dashboard's model label red with a ⚠ until the next clean run.
   (default `13`s, which is 4.6 RPM — under the free tier's 5 RPM ceiling). `LLM_MIN_INTERVAL`
   sets both at once.
 
+### Never publish over a good briefing
+The Gist holds the only copy of a day's briefing, so an empty result must never
+overwrite it. The pipeline aborts (exit 75, `dispatch` never runs) when:
+
+- ingest kept no articles — usually everything was already published earlier today;
+- articles were scored but **none** came back usable — a broken response contract,
+  not a quiet news day;
+- every scored article was rejected (`EMPTY_OK=1` publishes anyway);
+- features went into the editor and zero cards came out.
+
+**JSON-object mode matters here.** OpenAI's `json_object` format cannot return a
+bare top-level array, so the gatekeeper prompt asks for `{"verdicts": [...]}`. On
+2026-08-02 the prompt still said "JSON array only": all five batches returned valid
+JSON, the wrapper key was unrecognised, 130 articles scored zero, and an empty
+briefing replaced a good one with no error in the log. `_unwrap` now accepts any
+wrapper (including an object keyed by article id), ids are compared as strings, and
+an unrecognised shape is printed rather than silently dropped.
+
+Cross-run dedupe marks an article published as soon as it survives ingest, so a bad
+run "spends" its articles. To rebuild that day, run the workflow manually with the
+**"Recovery: re-ingest articles already marked published"** checkbox ticked — it
+sets `CROSS_RUN_DEDUPE=0` for that run only.
+
 Simulate the whole chain without touching the API — no key or network needed:
 
 ```
-cd pipeline && python test_llm_fallback.py
+cd pipeline && python test_llm_fallback.py        # provider chain + failover
+cd pipeline && python test_gatekeeper_parsing.py  # verdict shapes + the guard
 ```
 
 > Note: Gemini 3.x deprecates the `temperature` / `top_p` / `top_k` sampling params

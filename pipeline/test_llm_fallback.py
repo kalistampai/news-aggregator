@@ -497,6 +497,44 @@ def test_cooldown_never_empties_the_candidate_list():
         llm.LLM_BUSY_COOLDOWN = 120
 
 
+# ---- attribution is per STAGE, not per model id -----------------------------
+def test_stages_sharing_a_model_do_not_borrow_each_others_credit():
+    # REGRESSION (2026-08-02): both stages were configured to gpt-5.6-sol, the
+    # gatekeeper made 5 calls, the editor made none — and the dashboard labelled
+    # the empty briefing "via openai:gpt-5.6-sol" because the record was keyed by
+    # model id. A stage that never called anything must report nothing.
+    scripted(openai_script={bare(SOL): GOOD_JSON})
+    with redirect_stdout(io.StringIO()):
+        llm.complete_json("sys", "p", SOL, fallback_models=[], stage="gatekeeper")
+
+    gate = llm.stage_report("gatekeeper", SOL)
+    editor = llm.stage_report("editor", SOL)
+    assert gate["effective"] == SOL, gate
+    assert gate["counts"] == {SOL: 1}, gate
+    assert editor["effective"] is None, f"editor claimed credit it never earned: {editor}"
+    assert editor["counts"] == {}, editor
+
+
+def test_each_stage_reports_its_own_model():
+    # Cooldown off so the second call re-tries the first choice: this test is
+    # about attribution keys, not routing.
+    llm.LLM_BUSY_COOLDOWN = 0
+    try:
+        oa, _ = scripted(openai_script={bare(SOL): busy_openai(),
+                                        bare(TERRA): GOOD_JSON})
+        with redirect_stdout(io.StringIO()):
+            llm.complete_json("sys", "p", SOL, fallback_models=[TERRA],
+                              stage="gatekeeper")
+        oa.script = {bare(SOL): GOOD_JSON, bare(TERRA): GOOD_JSON}
+        with redirect_stdout(io.StringIO()):
+            llm.complete_json("sys", "p", SOL, fallback_models=[TERRA],
+                              stage="editor")
+        assert llm.stage_report("gatekeeper", SOL)["effective"] == TERRA
+        assert llm.stage_report("editor", SOL)["effective"] == SOL
+    finally:
+        llm.LLM_BUSY_COOLDOWN = 120
+
+
 # ---- runner -----------------------------------------------------------------
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

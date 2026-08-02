@@ -10,6 +10,7 @@ runs, so the published briefing is untouched.
 import sys
 
 import ingest, gatekeeper, editor, dispatch
+from gatekeeper import EmptyScoringError
 from llm import ModelsBusyError
 
 if __name__ == "__main__":
@@ -18,6 +19,11 @@ if __name__ == "__main__":
         gatekeeper.main()
         editor.main()
         dispatch.main()
+    except EmptyScoringError as exc:
+        print(f"\n[run] NOTHING TO PUBLISH — {exc}", flush=True)
+        print("[run] The Gist still holds the previous briefing, unchanged.",
+              flush=True)
+        sys.exit(75)          # EX_TEMPFAIL — same class as an outage
     except ModelsBusyError as exc:
         print(f"\n[run] TEMPORARY OUTAGE — {exc}", flush=True)
         print("[run] Nothing was published: the Gist still holds the previous "

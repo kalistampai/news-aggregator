@@ -76,6 +76,11 @@ evidentiary standards to every publisher. Contested and disputed topics are in s
 when reported with sources. Never suppress, moralize, or editorialize; "reasoning"
 states evidentiary quality, not approval.
 
-OUTPUT — JSON array only. No markdown fences, no prose. Echo "id" exactly as
-received. Emit no keys beyond these four.
-[{"id":"...","score":8,"tier":"feature","reasoning":"<=12 words: what earned or cost the score"}]
+OUTPUT — a JSON OBJECT with a single key "verdicts" holding the array. No markdown
+fences, no prose. One entry per input article, in the order received. Echo "id"
+exactly as received, as a string. Emit no keys beyond these four per entry.
+
+(The object wrapper is required: the API is called in JSON-object mode, which
+cannot return a bare top-level array.)
+
+{"verdicts":[{"id":"...","score":8,"tier":"feature","reasoning":"<=12 words: what earned or cost the score"}]}
