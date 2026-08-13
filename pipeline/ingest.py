@@ -19,6 +19,8 @@ import html
 import json
 import os
 import re
+import threading
+import time
 from collections import Counter
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -38,6 +40,14 @@ REPORT_MD = HERE / "feed_report.md"
 LOOKBACK_HOURS = int(os.environ.get("LOOKBACK_HOURS", "24"))
 MAX_PER_FEED = int(os.environ.get("MAX_PER_FEED", "25"))       # entries per feed
 MAX_PER_SOURCE = int(os.environ.get("MAX_PER_SOURCE", "12"))   # after dedupe, per host
+# PRIORITY SECTIONS get a bigger budget, counted PER FEED instead of per host.
+# Two reasons the per-host cap throttled the lead section badly:
+#   1. reddit.com is one host for 14 feeds, so all 11 scam subreddits were
+#      fighting over a single 12-article budget.
+#   2. Seven scam sources hit exactly 12 on 2026-08-13 and were truncated.
+# Per-feed counting means one scam subreddit can no longer starve the others.
+MAX_PER_PRIORITY_SOURCE = int(os.environ.get("MAX_PER_PRIORITY_SOURCE", "30"))
+PRIORITY_SECTIONS = {"scam / fraud alerts"}
 MAX_TOTAL = int(os.environ.get("MAX_TOTAL", "1500"))           # global safety valve
 SNIPPET_CHARS = int(os.environ.get("SNIPPET_CHARS", "600"))
 REQUEST_TIMEOUT = int(os.environ.get("REQUEST_TIMEOUT", "10"))
@@ -49,6 +59,44 @@ DATELESS_POLICY = os.environ.get("DATELESS_POLICY", "keep").lower()
 
 USER_AGENT = ("Mozilla/5.0 (compatible; BriefingBot/1.0; "
               "+https://github.com/) FeedFetcher")
+
+# ---- per-host throttle ------------------------------------------------------
+# INGEST_WORKERS threads ignore whose server they are hitting. That is fine when
+# a host owns one feed, but feeds.txt now carries 14 reddit.com feeds, and
+# firing them at once made Reddit 429 EVERY ONE of them — the whole scam-report
+# tier silently contributed zero. Spacing requests per HOST fixes it without
+# slowing the other ~195 sources, since only the crowded host ever waits.
+HOST_MIN_INTERVAL = float(os.environ.get("HOST_MIN_INTERVAL", "1.0"))
+# Reddit's unauthenticated ceiling is ~10 requests/min/IP. 14 feeds at 6s is
+# exactly 10/min — right ON the limit, and it still 429'd. 10s is 6/min, a real
+# margin, and costs ~140s of a run that has a 60-minute budget.
+# NOTE: a 429 here is a BURST problem and this fixes it. A 403 is different —
+# that is Reddit refusing the IP class (datacenter), which no spacing can fix;
+# see the Reddit note in feeds.txt.
+HOST_INTERVAL_OVERRIDES = {
+    "reddit.com": float(os.environ.get("REDDIT_MIN_INTERVAL", "10")),
+}
+_host_last: dict[str, float] = {}
+_host_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
+def _host_interval(host: str) -> float:
+    for domain, gap in HOST_INTERVAL_OVERRIDES.items():
+        if host == domain or host.endswith("." + domain):
+            return gap
+    return HOST_MIN_INTERVAL
+
+
+def _throttle(host: str) -> None:
+    """Block until this host's minimum gap has elapsed. Serial per host only."""
+    with _locks_guard:
+        lock = _host_locks.setdefault(host, threading.Lock())
+    with lock:                       # held across the sleep: serializes the host
+        wait = _host_interval(host) - (time.monotonic() - _host_last.get(host, 0.0))
+        if wait > 0:
+            time.sleep(wait)
+        _host_last[host] = time.monotonic()
 
 FEED_CANDIDATES = [
     "feed/", "feed", "rss/", "rss", "rss.xml", "feed.xml", "atom.xml",
@@ -120,6 +168,7 @@ STATUS_HELP = {
     "STALE": f"Feed works but every entry is older than {LOOKBACK_HOURS}h.",
     "FILTERED": "Fresh entries existed but all were dropped by the pre-filter.",
     "EMPTY": "Feed parsed successfully but contains zero entries.",
+    "DUPLICATE": "Resolved to a feed another entry already provides — remove this line.",
     "NO_FEED": "No RSS/Atom feed could be discovered at this URL.",
     "HTTP_404": "Dead URL (404/410). Feed moved or removed.",
     "HTTP_403": "Blocked (403). WAF/Cloudflare/bot protection or UA ban.",
@@ -137,6 +186,47 @@ STATUS_HELP = {
 FAILING = {k for k in STATUS_HELP if k != "OK"}
 
 
+def dedupe_key(url: str) -> str:
+    """Normalize a feed URL for duplicate detection.
+
+    Catches the cheap duplicates BEFORE any network cost: scheme differences,
+    a leading "www.", and a trailing slash. Path variants that resolve to one
+    document (/feed/ -> /rss.xml) and acquisition redirects (egress.com ->
+    blog.knowbe4.com) are INVISIBLE from the URL alone — those are collapsed
+    after discovery, in main().
+    """
+    u = re.sub(r"^https?://", "", url.strip().lower())
+    return re.sub(r"^www\.", "", u).rstrip("/")
+
+
+# Top-level sections are "# --- Name ---" (3+ dashes). The "# -- Name --"
+# sub-headings nested inside them are deliberately NOT boundaries, so a feed
+# under "-- Consumer scam trackers --" still counts as "Scam / Fraud Alerts".
+_SECTION_RE = re.compile(r"^#\s*-{3,}\s*(.+?)\s*-{3,}\s*$")
+
+
+def load_feed_sections() -> dict[str, str]:
+    """Map each active feed URL to the '# --- Section ---' heading above it.
+
+    Used only to decide which feeds get the larger priority budget, so the
+    section names live in feeds.txt (one source of truth) instead of being
+    duplicated as a hardcoded host list here that would silently drift.
+    """
+    sections, current = {}, ""
+    for line in FEEDS_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        m = _SECTION_RE.match(line)
+        if m:
+            current = m.group(1).strip().lower()
+            continue
+        if not line or line.startswith("#"):
+            continue
+        url = line.split("#", 1)[0].strip().split(" ")[0]
+        if url.lower().startswith(("http://", "https://")):
+            sections[url] = current
+    return sections
+
+
 def load_feed_urls() -> list[str]:
     """One URL per line. Ignores blanks, # comments, and inline # annotations."""
     urls, seen = [], set()
@@ -149,7 +239,7 @@ def load_feed_urls() -> list[str]:
         line = parts[0] if parts else ""
         if not line.lower().startswith(("http://", "https://")):
             continue
-        key = line.rstrip("/").lower()
+        key = dedupe_key(line)
         if key in seen:                            # de-dupe the source list itself
             continue
         seen.add(key)
@@ -159,6 +249,7 @@ def load_feed_urls() -> list[str]:
 
 def _http_get(url: str):
     """GET a URL. Returns (response|None, status_code, detail)."""
+    _throttle(urlparse(url).netloc.lower().replace("www.", ""))
     try:
         r = SESSION.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
     except requests.exceptions.Timeout:
@@ -413,20 +504,60 @@ def main() -> None:
                                 "entries_seen": 0, "kept": 0,
                                 "dropped": {}, "items": []})
 
+    # ---- resolved-feed dedupe ---------------------------------------------
+    # Two different lines in feeds.txt can serve the SAME feed, and neither is
+    # visible to the URL key in load_feed_urls(): a path variant (knowbe4
+    # /feed/ -> /rss.xml) or an acquisition redirect (egress.com/blog/rss ->
+    # blog.knowbe4.com/rss.xml, a different host entirely). Collapse them on the
+    # feed actually resolved, and report the loser as DUPLICATE so the health
+    # panel names the line to delete instead of hiding it.
+    # Walked in feeds.txt order so the winner is deterministic — the first
+    # listing of a feed keeps it, however the threads happened to finish.
+    # A second key catches mirrors that resolve to DIFFERENT urls but serve the
+    # same articles (gacs.app /rss.xml vs /api/public/feed.xml). Only applied to
+    # feeds that actually returned items — otherwise every STALE feed, which has
+    # an empty item set, would collapse into a single entry.
+    rank = {u: i for i, u in enumerate(feeds)}
+    by_feed: dict[str, dict] = {}
+    by_content: dict[frozenset, dict] = {}
+    for rec in sorted(records, key=lambda r: rank.get(r["url"], len(rank))):
+        if not rec.get("feed_url") or rec["status"] in FAILING:
+            continue
+        keys = [("resolves to", dedupe_key(rec["feed_url"]), by_feed)]
+        if rec["items"]:
+            keys.append(("serves the same articles as",
+                         frozenset(i["id"] for i in rec["items"]), by_content))
+        for phrasing, key, table in keys:
+            winner = table.get(key)
+            if winner is None:
+                table[key] = rec
+                continue
+            rec.update(status="DUPLICATE", items=[], kept=0,
+                       detail=f"same feed as {winner['url']}")
+            print(f"[ingest] DUPLICATE: {rec['url']} {phrasing} "
+                  f"{winner['url']} — drop one of the two lines", flush=True)
+            break
+
     # Dedupe by URL, then normalized title; cap per source; global safety valve.
+    # Priority-section feeds are counted per FEED and against the larger budget;
+    # everything else keeps the original per-host cap.
+    sections = load_feed_sections()
     seen_url, seen_title, per_source = set(), set(), Counter()
     deduped: list[dict] = []
     for rec in sorted(records, key=lambda r: r["source"]):
+        priority = sections.get(rec["url"], "") in PRIORITY_SECTIONS
+        cap = MAX_PER_PRIORITY_SOURCE if priority else MAX_PER_SOURCE
+        cap_key = rec["url"] if priority else rec["source"]
         for it in rec["items"]:
             if len(deduped) >= MAX_TOTAL:
                 break
             tkey = re.sub(r"\W+", "", it["title"].lower())[:80]
             if it["url"] in seen_url or tkey in seen_title:
                 continue
-            if per_source[it["source"]] >= MAX_PER_SOURCE:
+            if per_source[cap_key] >= cap:
                 continue
             seen_url.add(it["url"]); seen_title.add(tkey)
-            per_source[it["source"]] += 1
+            per_source[cap_key] += 1
             deduped.append(it)
 
     # ---- cross-run dedupe -------------------------------------------------

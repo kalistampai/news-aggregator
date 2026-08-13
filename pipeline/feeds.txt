@@ -15,9 +15,18 @@
 # expected. Only CAPTCHA / 4xx / 5xx / DNS / NO_FEED are real problems. Never
 # prune a feed for being STALE — that is exactly when its next post matters.
 #
-# Current count: 166 active sources.  174 - 8 (dead sources pruned 2026-08-13).
+# Current count: 209 active sources.  166 + 43 (Scam / Fraud expansion, 2026-08-13).
+# 65 of the 209 feed the "Scams & Fraud" section.
 # Pruning method: 3 confirmation passes + a browser-UA retest, so only PERSISTENT
 # hard failures were cut. Transients (Reddit 429/403) were deliberately kept.
+#
+# DUPLICATES ARE NOW CAUGHT AUTOMATICALLY. ingest.py collapses two entries that
+# resolve to the same feed URL *or* return the same article set, and reports the
+# loser as DUPLICATE naming the line to delete. That covers path variants
+# (/feed/ -> /rss.xml), bare-domain-vs-path, and cross-host acquisition
+# redirects (egress.com -> blog.knowbe4.com) that no URL comparison can see.
+# Adding a duplicate line is therefore safe, but still wasteful — it costs a
+# fetch. Check the health panel for DUPLICATE rows after any bulk edit.
 # Keep this number in sync when editing: a stale count in this header once
 # caused a false "63 feeds vanished" alarm when it disagreed with the run log.
 
@@ -244,6 +253,74 @@ https://www.fbi.gov/feeds/national-press-releases/rss.xml
 # -- Anti-fraud / awareness orgs --
 https://takefive-stopfraud.org.uk/feed/
 https://www.getsafeonline.org/feed/
+https://about-fraud.com/feed
+https://sequenceinc.com/fraudfiles/feed
+https://www.fraudsmart.ie/feed/
+
+# -- Reddit: victim reports, potentially the highest-volume scam source -------
+# Every subreddit below was individually verified alive on 2026-08-13 (article
+# counts are what each returned on a clean check), EXCEPT r/romance_scams, which
+# never got past a rate limit and is marked (?).
+#
+# READ THIS BEFORE PRUNING THESE. Reddit rate-limits by IP and the penalty
+# ACCUMULATES, so a batch of checks poisons later ones: a single rested request
+# returns HTTP 200 with our own UA, while 14 in a row return 429 for hours
+# afterwards. ingest.py therefore throttles reddit.com to one request per 10s
+# (REDDIT_MIN_INTERVAL), which is ~6/min against Reddit's ~10/min ceiling.
+#
+# That fix could NOT be confirmed locally — the test IP was already penalized
+# past the point of measuring. The first Actions run is the real datum:
+#   429  -> still bursting; raise REDDIT_MIN_INTERVAL (try 15-20).
+#   403  -> Reddit refusing the datacenter IP class. No spacing fixes that;
+#           comment these out, they will never work from CI.
+https://www.reddit.com/r/Scams/.rss                # verified: 23 articles
+https://www.reddit.com/r/scambait/.rss             # verified: 20 articles
+https://www.reddit.com/r/FraudPrevention/.rss      # verified: 18 articles
+https://www.reddit.com/r/IdentityTheft/.rss        # verified: 17 articles
+https://www.reddit.com/r/scammers/.rss             # verified: 14 articles
+https://www.reddit.com/r/CryptoScams/.rss          # verified: 10 articles
+https://www.reddit.com/r/ScamCenter/.rss           # verified: 8 articles
+https://www.reddit.com/r/ScamAwarenessUK/.rss      # verified: feed live, low cadence
+https://www.reddit.com/r/TheScamReport/.rss        # verified: feed live, low cadence
+https://www.reddit.com/r/ScamsOnReddit/.rss        # verified: feed live, low cadence
+https://www.reddit.com/r/romance_scams/.rss        # (?) alive? never cleared a 429 locally
+
+# -- Regulators & law enforcement: enforcement actions, investor warnings --
+https://www.fca.org.uk/news/rss.xml       # FCA investment-scam warnings, high cadence
+https://www.justice.gov/news/rss          # DOJ fraud indictments and prosecutions
+https://www.cfpb.gov/about-us/newsroom/feed/
+https://oig.ssa.gov/feed.xml              # resolved from /rss/ — SSA imposter scams
+https://www.nasaa.org/feed/               # state securities regulators
+
+# -- Crypto & investment fraud --
+https://www.chainalysis.com/blog/feed/
+https://cointelegraph.com/rss/tag/scams
+https://rekt.news/rss/feed.xml
+https://slowmist.medium.com/feed
+https://drops.scamsniffer.io/feed/
+
+# -- Phishing, BEC and email fraud --
+https://www.recordedfuture.com/feed
+https://intel471.com/blog/feed
+https://flashpoint.io/blog/feed/
+https://redcanary.com/blog/feed/
+https://www.lookout.com/blog/rss.xml
+https://www.mimecast.com/blog/rss/
+https://www.ironscales.com/blog/rss.xml
+https://blog.sucuri.net/feed
+https://www.kaspersky.com/blog/feed/
+https://easydmarc.com/blog/feed/
+https://powerdmarc.com/feed/
+https://dmarcian.com/feed/
+
+# -- Payments, chargeback and identity fraud --
+https://www.pymnts.com/feed/
+https://www.finextra.com/rss/headlines.aspx
+https://www.bankinfosecurity.com/rss-feeds
+https://www.databreaches.net/feed/
+https://www.merchantfraudjournal.com/feed/
+https://www.chargebackgurus.com/blog/rss.xml
+https://sift.com/blog/feed
 
 # -- Phishing & fraud research (vendor labs, judged on merit by the gatekeeper) --
 https://www.group-ib.com/blog/rss.xml
@@ -272,3 +349,27 @@ https://www.iddataweb.com/feed/
 # https://www.scamcapital.com   # SPA, no feed
 # https://phishtank.org   # HTML page, no feed (data is CSV/API only)
 # https://www.occrp.org/en/feed   # already listed under World News above
+#
+# -- From "new scam section v2", checked 2026-08-13 --
+# https://tweetfeed.live/malicious-urls/rss.xml   # HTTP 404
+# https://www.acfe.com/shared-content/rss-feeds/acfe-blog.rss   # HTTP 404
+#
+# PROVEN DUPLICATES — these serve a feed already listed above. Verified by
+# comparing article-id sets, not by guessing from the URL. ingest.py now also
+# catches these automatically and reports them as DUPLICATE, but leaving them
+# out keeps the fetch cost off the run entirely:
+# https://gacs.app/api/public/feed.xml   # identical article set to gacs.app/rss.xml
+# https://www.scampulse.com              # bare domain resolves to /rss/ above
+# https://blog.knowbe4.com/feed/         # resolves to blog.knowbe4.com/rss.xml above
+# https://www.egress.com/blog/rss        # Egress was acquired by KnowBe4; redirects
+#                                        # to blog.knowbe4.com/rss.xml (different HOST,
+#                                        # so no URL comparison could have caught it)
+#
+# -- Other scam sources tested 2026-08-13 and rejected (no usable feed) --
+# apwg.org/feed/ 404 | us.norton.com/blog/feed 404 | www.zerofox.com 403
+# www.bolster.ai CAPTCHA | www.memcyco.com 404 | seon.io PARSE_ERROR
+# www.sardine.ai 404 | unit21.ai 404 | www.socure.com 404 | featurespace NO_FEED
+# blog.scamadviser.com DNS_ERROR | www.thisismoney.co.uk 403
+# www.consumeraffairs.com CAPTCHA | gasa.org 404 | globalantiscam.org 404
+# www.finra.org 404 | www.fincen.gov 404 | ico.org.uk 404 | www.hhs.gov 403
+# treasury.gov OFAC NO_FEED | www.certik.com 404 | www.elliptic.co 404

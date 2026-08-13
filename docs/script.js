@@ -320,9 +320,10 @@ async function buildStore(gist) {
 /* Canonical running order, mirroring prompts/editor.txt. Categories the editor
    emits that are not in this list (e.g. the "Unsorted" degraded bucket) sort to
    the end alphabetically rather than being dropped. */
+/* First three are the operator's standing priorities, highest first. */
 const CATEGORY_ORDER = [
-  "Offensive Security", "Scams & Fraud", "OSINT & Recon", "Hardware & SDR",
-  "AI News", "AI / ML", "Linux & Homelab", "Finance", "DIY & Self-Reliance",
+  "Scams & Fraud", "AI News", "Offensive Security", "AI / ML", "OSINT & Recon",
+  "Hardware & SDR", "Linux & Homelab", "Finance", "DIY & Self-Reliance",
 ];
 
 function orderCategories(names) {
