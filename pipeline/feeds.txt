@@ -15,7 +15,7 @@
 # expected. Only CAPTCHA / 4xx / 5xx / DNS / NO_FEED are real problems. Never
 # prune a feed for being STALE — that is exactly when its next post matters.
 #
-# Current count: 158 active sources.  118 - 2 (hard failures) + 39 (AI news) + 3 (Substack additions).
+# Current count: 174 active sources.  154 + 20 (Scam / Fraud Alerts, 2026-08-12).
 # Keep this number in sync when editing: a stale count in this header once
 # caused a false "63 feeds vanished" alarm when it disagreed with the run log.
 
@@ -210,3 +210,63 @@ https://www.clubic.com/feed/news.rss
 # https://unlimitedhangout.com/feed/   # removed: exact duplicate
 https://www.thefp.com/feed   # (?) best-guess; was https://www.thefp.com/
 https://www.404media.co/rss/
+
+# --- Scam / Fraud Alerts ---------------------------------------------------
+# Feeds the "Scams & Fraud" section, a CORE domain in prompts/gatekeeper.txt.
+# Every URL below was verified with feedcheck.py before being added — these are
+# resolved feed URLs, not homepages, so none of them burns discovery time.
+#
+# VOLUME NOTE: the consumer-protection sources are deliberately weighted toward
+# high-cadence trackers (scampulse, gacs, group-ib) because the government and
+# awareness feeds publish weekly at best. Expect most of the .gov entries to
+# read STALE most mornings — that is normal here, not a failure (see the header).
+#
+# NOTE ON PER-HOST CAPS: MAX_PER_SOURCE (12) is keyed on the feed's HOST, so the
+# nypost and guardian scam feeds share a budget with their general-news feeds
+# already listed above. They contribute, but cannot dominate.
+
+# -- Consumer scam trackers (highest volume) --
+https://www.scampulse.com/rss/
+https://gacs.app/rss.xml
+https://blog.knowbe4.com/rss.xml   # resolved from /feed/ (Scam of the Week)
+https://nypost.com/tag/scams/feed/
+https://www.theguardian.com/money/series/scam-watch/rss
+
+# -- Government / law-enforcement fraud alerts (low cadence, high authority) --
+https://www.scamwatch.gov.au/rss/news-feed.xml
+https://www.ic3.gov/CSA/RSS   # working IC3 endpoint; www.ic3.gov itself is CAPTCHA-walled
+https://www.cftc.gov/RSS/RSSGP/rssgp.xml
+https://www.sec.gov/news/pressreleases.rss
+https://www.fbi.gov/feeds/national-press-releases/rss.xml
+
+# -- Anti-fraud / awareness orgs --
+https://takefive-stopfraud.org.uk/feed/
+https://www.getsafeonline.org/feed/
+
+# -- Phishing & fraud research (vendor labs, judged on merit by the gatekeeper) --
+https://www.group-ib.com/blog/rss.xml
+https://cofense.com/feed/
+https://www.silentpush.com/feed/
+https://blog.checkpoint.com/feed/
+https://www.bitdefender.com/blog/api/rss/labs/
+https://www.tripwire.com/state-of-security/feed
+https://blog.avira.com/feed/
+https://www.iddataweb.com/feed/
+
+# -- Verified UNUSABLE 2026-08-12 — left here so they are never re-added blind --
+# All of the following were checked with the pipeline's own fetcher and returned
+# no parseable feed. Uncomment only if the source ships a real RSS/Atom endpoint.
+# https://www.ftc.gov/feeds/press-release-consumer-protection.xml   # HTTP 403 (all ftc.gov feed paths 403 our UA)
+# https://consumer.ftc.gov/consumer-alerts   # HTTP 403, and /rss variants 403 too
+# https://www.bbb.org/scamtracker   # CAPTCHA interstitial
+# https://www.ic3.gov   # CAPTCHA interstitial — use /CSA/RSS above instead
+# https://www.reportfraud.police.uk   # CAPTCHA interstitial (also actionfraud.police.uk/rss)
+# https://www.aarp.org/money/scams-fraud/   # HTML page, no discoverable feed
+# https://www.consumerreports.org/money/scams-fraud/   # HTTP 404
+# https://www.asa.org.uk   # HTML page, no discoverable feed
+# https://scamminder.com   # SPA, no feed
+# https://stopscam.ai/news   # SPA, no feed
+# https://scams.live   # SPA, no feed
+# https://www.scamcapital.com   # SPA, no feed
+# https://phishtank.org   # HTML page, no feed (data is CSV/API only)
+# https://www.occrp.org/en/feed   # already listed under World News above

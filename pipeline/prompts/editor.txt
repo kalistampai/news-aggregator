@@ -12,8 +12,23 @@ A JSON object: {"today": "YYYY-MM-DD", "features": [{"id","title","source","url"
 
 EXECUTION RULES:
 1. Group features under these categories (include only those that have content):
-   "Offensive Security", "OSINT & Recon", "Hardware & SDR", "AI News", "AI / ML",
-   "Linux & Homelab", "Finance", "DIY & Self-Reliance".
+   "Offensive Security", "Scams & Fraud", "OSINT & Recon", "Hardware & SDR",
+   "AI News", "AI / ML", "Linux & Homelab", "Finance", "DIY & Self-Reliance".
+
+   SCAM ROUTING - "Scams & Fraud" is a standing section, do not fold it into
+   "Offensive Security":
+   - "Scams & Fraud" = the victim-facing side. Active scam campaigns, fraud
+     typologies, brand or agency impersonation, romance and pig-butchering rings,
+     investment and crypto fraud, refund / delivery / gift-card / tech-support
+     scams, business email compromise, elder fraud, regulator and law-enforcement
+     alerts, enforcement actions, takedowns, consumer warnings.
+   - "Offensive Security" = the attacker-tradecraft side. A phishing-kit teardown,
+     delivery chain, or C2 infrastructure writeup stays in Offensive Security.
+   The test is WHO the article serves: someone avoiding or investigating being
+   defrauded ("Scams & Fraud") versus someone studying the attack ("Offensive
+   Security"). When an item plausibly fits both, prefer "Scams & Fraud".
+   For scam cards, lead the bullets with the concrete lure, the impersonated
+   brand or agency, and any dollar figure or victim count.
 
    AI ROUTING - these two are distinct, do not merge them:
    - "AI News"  = the industry moving. Model releases and version bumps, lab

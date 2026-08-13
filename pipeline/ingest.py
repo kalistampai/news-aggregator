@@ -77,6 +77,20 @@ DENY_TITLE = re.compile(
 MIN_TITLE_CHARS = 12
 JUNK_TITLES = {"comments", "untitled", "no title", "(no title)", "rss", "feed"}
 
+# SCAM EXEMPTION — load-bearing for the Scams & Fraud section.
+# "Black Friday refund scam", "Facebook giveaway scam" and "sweepstakes fraud"
+# are precisely the headlines that section exists to surface, and every one of
+# them trips a DENY_TITLE term. That denylist is aimed at RETAIL PROMOS, so a
+# title plainly ABOUT a scam is exempted instead of dropped as commercial spam.
+# This only widens what reaches the gatekeeper — a real promo that sneaks
+# through still scores 0-2 there, whereas a drop here is silent and permanent.
+SCAM_SIGNAL = re.compile(
+    r"\b(scam|scams|scammer|scammers|scamming|fraud|frauds|fraudster|"
+    r"fraudulent|phish|phishing|smishing|vishing|imposter|impostor|"
+    r"impersonat\w*|counterfeit|swindle|con artist|rip-?off|bogus|"
+    r"identity theft|romance scam|pig butchering|money mule|fake)\b", re.I,
+)
+
 # Keyword ALLOWLIST is off by default. A hard allowlist upstream of the model
 # defeats the gatekeeper's whole purpose (semantic relevance) and will drop
 # novel/oddly-titled items the model would have scored 9. Enable only if you are
@@ -262,7 +276,7 @@ def _prefilter(title: str, snippet: str) -> str | None:
     t = title.strip()
     if len(t) < MIN_TITLE_CHARS or t.lower() in JUNK_TITLES:
         return "junk_title"
-    if DENY_TITLE.search(t):
+    if DENY_TITLE.search(t) and not SCAM_SIGNAL.search(f"{t} {snippet}"):
         return "commercial_spam"
     if ALLOWLIST_MODE:
         blob = f"{t} {snippet}".lower()

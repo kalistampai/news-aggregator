@@ -321,8 +321,8 @@ async function buildStore(gist) {
    emits that are not in this list (e.g. the "Unsorted" degraded bucket) sort to
    the end alphabetically rather than being dropped. */
 const CATEGORY_ORDER = [
-  "Offensive Security", "OSINT & Recon", "Hardware & SDR", "AI News", "AI / ML",
-  "Linux & Homelab", "Finance", "DIY & Self-Reliance",
+  "Offensive Security", "Scams & Fraud", "OSINT & Recon", "Hardware & SDR",
+  "AI News", "AI / ML", "Linux & Homelab", "Finance", "DIY & Self-Reliance",
 ];
 
 function orderCategories(names) {

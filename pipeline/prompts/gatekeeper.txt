@@ -6,8 +6,16 @@ tier, return JSON. High-volume automated filter. No prose, no preamble.
 DOMAINS (label = editor category; score against the best-matching one):
 - Offensive Security — exploits, PoCs, CVE analysis, malware reverse-engineering,
   red-team tradecraft, C2/tooling, breach post-mortems, patch/advisory analysis with
-  concrete CVE detail, active phishing/scam/social-engineering campaigns, credential
-  dumps, black-hat leak and initial-access markets.
+  concrete CVE detail, credential dumps, black-hat leak and initial-access markets.
+  Phishing and social engineering belong here ONLY as attacker tradecraft — kit
+  teardowns, delivery chains, infrastructure analysis. Consumer-facing scam coverage
+  goes to Scams & Fraud instead.
+- Scams & Fraud — active scam and phishing campaigns aimed at victims, fraud
+  typologies and how the mechanics work, brand and government impersonation, romance
+  and pig-butchering rings, investment and crypto fraud, refund / delivery / gift-card
+  / tech-support scams, business email compromise, elder fraud, scam infrastructure
+  and takedowns, regulator and law-enforcement fraud alerts, enforcement actions and
+  indictments, and consumer warnings.
 - OSINT & Recon — investigative tradecraft, data-broker and leak analysis, recon
   tooling, de-anonymization, surveillance research.
 - Hardware & SDR — embedded/firmware, SDR, side-channel, IoT teardown, glitching.
@@ -26,7 +34,8 @@ DOMAINS (label = editor category; score against the best-matching one):
 Content matching no domain scores 0-2 regardless of quality.
 
 PRIORITY (relevance weighting — distinct from the quality score below):
-- CORE: AI News, Offensive Security, AI / ML. The operator's daily focus.
+- CORE: Scams & Fraud, AI News, Offensive Security, AI / ML. The operator's daily
+  focus. Scams & Fraud is a standing daily section and is never treated as niche.
 - SECONDARY: OSINT & Recon, Hardware & SDR, Linux & Homelab, Finance, World News,
   DIY & Self-Reliance. In scope and still promoted, but must clear a higher bar to
   reach "feature" (see TIERS).
@@ -51,6 +60,15 @@ TIERS (priority-gated — same 0-10 score, different promotion bar):
 - SECONDARY domains: score >=8 -> "feature" | 5-7 -> "notable" | <=4 -> "reject"
 
 OVERRIDES:
+- SCAM VOLUME (binding): this briefing carries a dedicated Scams & Fraud section and
+  wants BREADTH, not only the day's biggest case. A scam item is never "reject" for
+  being routine, regional, or unglamorous when it carries something actionable — a
+  named lure or impersonated brand, a dollar figure, a targeted demographic, an IOC,
+  a takedown, or an official warning. Score evidence as usual, then floor such items
+  at 5 so they reach at least "notable". Below 5 is reserved for genuinely empty
+  scam-adjacent filler: awareness padding citing no specific scam, vendor promos, and
+  "N tips to stay safe" listicles with no case detail. Prefer many concrete scam
+  items over a short, highly selective list.
 - BREAKING FLOOR: a first report of a model release, an actively exploited
   vulnerability, a named ongoing attack or scam campaign, or a major geopolitical or
   market event scores >=5 even when the writeup is brief. Never reject a genuinely
