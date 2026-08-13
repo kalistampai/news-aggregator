@@ -15,7 +15,9 @@
 # expected. Only CAPTCHA / 4xx / 5xx / DNS / NO_FEED are real problems. Never
 # prune a feed for being STALE — that is exactly when its next post matters.
 #
-# Current count: 174 active sources.  154 + 20 (Scam / Fraud Alerts, 2026-08-12).
+# Current count: 166 active sources.  174 - 8 (dead sources pruned 2026-08-13).
+# Pruning method: 3 confirmation passes + a browser-UA retest, so only PERSISTENT
+# hard failures were cut. Transients (Reddit 429/403) were deliberately kept.
 # Keep this number in sync when editing: a stale count in this header once
 # caused a false "63 feeds vanished" alarm when it disagreed with the run log.
 
@@ -25,7 +27,7 @@ https://www.csoonline.com/feed/
 https://cybersecurity-magazine.com/feed/
 https://www.darkreading.com/rss.xml
 https://www.hackingarticles.in/feed/
-https://www.hackread.com/feed/
+# https://www.hackread.com/feed/   # removed 2026-08-13: CAPTCHA 3/3 checks; Cloudflare challenge even with a real browser UA
 https://hackaday.com/feed/
 https://krebsonsecurity.com/feed/
 https://www.malwarebytes.com/blog/feed/index.xml
@@ -85,16 +87,16 @@ https://www.proofpoint.com/us/rss.xml
 https://socprime.com/blog/feed/
 https://www.upguard.com/blog/rss.xml
 https://fidelissecurity.com/feed/
-https://www.mcafee.com/blogs/feed/
+# https://www.mcafee.com/blogs/feed/   # removed 2026-08-13: HTTP 403 on the ENTIRE domain (homepage included), any UA; /rss/ and /rss.xml also fail
 https://heimdalsecurity.com/blog/feed/
 https://www.rapid7.com/blog/rss/
 https://posts.specterops.io/feed
 https://www.isdecisions.com/blog/feed/
 https://www.lastwatchdog.com/feed/
 https://www.huntress.com/blog/rss.xml
-https://cybersecurity.att.com/blogs/rss
+# https://cybersecurity.att.com/blogs/rss   # removed 2026-08-13: HTTP 503/403. AT&T Cybersecurity rebranded to LevelBlue; all 4 levelblue.com feed paths 404
 https://www.seqrite.com/blog/feed/
-https://www.stealthmole.com/resources/intelligence-hub
+# https://www.stealthmole.com/resources/intelligence-hub   # removed 2026-08-13: never was a feed URL (HTML page); /blog/rss.xml, /rss.xml, /feed all 404
 
 # --- Best-guess by convention (?) — watch the NO FEED log for these ---
 https://jonnyzzz.com/feed.xml
@@ -142,7 +144,7 @@ https://www.mitnicksecurity.com/blog/rss.xml
 # -- Newsletters & analysis (the lastweekin.ai tier) --
 https://lastweekin.ai/feed
 https://research.openanalysis.net/feed.xml
-https://www.deeplearning.ai/the-batch/feed/
+# https://www.deeplearning.ai/the-batch/feed/   # removed 2026-08-13: HTTP 404 3/3; /the-batch/rss.xml returns 503, /feed/ and /blog/rss.xml 404
 https://magazine.sebastianraschka.com/feed
 https://www.interconnects.ai/feed
 https://www.aisnakeoil.com/feed
@@ -162,7 +164,7 @@ https://research.google/blog/rss/   # (?)
 https://www.microsoft.com/en-us/research/feed/
 https://developer.nvidia.com/blog/feed/
 https://ai.meta.com/blog/rss/   # (?)
-https://mistral.ai/news/feed.xml   # (?)
+https://mistral.ai/rss.xml   # was /news/feed.xml (404); corrected 2026-08-13, verified 80 entries
 https://stability.ai/news?format=rss   # (?)
 
 # -- Trade press: breaking AI headlines --
@@ -173,9 +175,9 @@ https://www.theverge.com/rss/ai-artificial-intelligence/index.xml   # (?)
 https://arstechnica.com/ai/feed/   # (?)
 https://www.technologyreview.com/topic/artificial-intelligence/feed/   # (?)
 https://syncedreview.com/feed/
-https://www.marktechpost.com/feed/
-https://www.artificialintelligence-news.com/feed/
-https://analyticsindiamag.com/feed/
+# https://www.marktechpost.com/feed/   # removed 2026-08-13: HTTP 403 3/3; Cloudflare challenge page even with a browser UA; /rss/ and /rss.xml also 403
+# https://www.artificialintelligence-news.com/feed/   # removed 2026-08-13: HTTP 403 3/3; Cloudflare challenge even with a browser UA; /rss/ and /rss.xml also 403
+# https://analyticsindiamag.com/feed/   # removed 2026-08-13: NO_FEED 3/3 (HTML, nothing discoverable); /rss/, /rss.xml, /index.xml all fail
 https://aibusiness.com/rss.xml   # (?)
 
 # -- AI security / red-teaming (overlaps the offensive-sec profile) --
