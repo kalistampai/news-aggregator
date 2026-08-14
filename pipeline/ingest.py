@@ -83,6 +83,15 @@ HOST_MIN_INTERVAL = float(os.environ.get("HOST_MIN_INTERVAL", "1.0"))
 # see the Reddit note in feeds.txt.
 HOST_INTERVAL_OVERRIDES = {
     "reddit.com": float(os.environ.get("REDDIT_MIN_INTERVAL", "10")),
+    # old.reddit.com HTML is a SEPARATE, far larger bucket than .rss. Measured
+    # 2026-08-14 with Reddit's own x-ratelimit headers:
+    #   www/old .rss  -> remaining 0.0 after ONE request (50s reset)
+    #   old.reddit HTML -> remaining 94-99 (488s reset)
+    # That is why .rss could never work at any spacing, and why HTML can.
+    # 6s, measured: at 2s eleven listings got 6/11 through, at 6s 9/11. The
+    # budget is generous but still burst-sensitive. 11 x 6s = ~66s of a run
+    # that has a 60-minute budget, so spacing is cheap insurance here.
+    "old.reddit.com": float(os.environ.get("OLD_REDDIT_MIN_INTERVAL", "6")),
 }
 _host_last: dict[str, float] = {}
 _host_locks: dict[str, threading.Lock] = {}
@@ -90,9 +99,10 @@ _locks_guard = threading.Lock()
 
 
 def _host_interval(host: str) -> float:
-    for domain, gap in HOST_INTERVAL_OVERRIDES.items():
+    # Longest domain first, so "old.reddit.com" wins over "reddit.com".
+    for domain in sorted(HOST_INTERVAL_OVERRIDES, key=len, reverse=True):
         if host == domain or host.endswith("." + domain):
-            return gap
+            return HOST_INTERVAL_OVERRIDES[domain]
     return HOST_MIN_INTERVAL
 
 
@@ -308,12 +318,14 @@ def discover_feed(url: str):
     """Resolve a parseable feed. Returns (feed_url, parsed, status, detail)."""
     host = urlparse(url).netloc
     if "reddit.com" in host:
-        # Query-aware: multireddit feeds carry "?limit=100", so testing the whole
-        # URL for a "/.rss" suffix would append a SECOND one and 404 the feed.
+        # Only normalise URLs that are ALREADY feed URLs. HTML listings are
+        # handled by _parse_reddit_feed and must never be given a "/.rss"
+        # suffix here — appending one turns a working listing into a 404.
+        # Query-aware too: ".rss?limit=100" must not gain a second "/.rss".
         parts = urlparse(url)
         path = parts.path.rstrip("/")
-        if not path.endswith("/.rss"):
-            url = parts._replace(path=path + "/.rss").geturl()
+        if path.endswith("/.rss"):
+            url = parts._replace(path=path).geturl()
     elif "news.ycombinator.com" in host:
         url = "https://news.ycombinator.com/rss"
 
@@ -388,6 +400,133 @@ def _prefilter(title: str, snippet: str) -> str | None:
     return None
 
 
+# ---- old.reddit.com HTML listings -------------------------------------------
+# Reddit serves .rss on a bucket of roughly ONE request per 50s, so the feed
+# path cannot be made to work at any spacing. The old.reddit HTML listing is a
+# different bucket (~100 per window) and carries the same posts, so scam
+# subreddits are read as HTML instead. See HOST_INTERVAL_OVERRIDES.
+#
+# Parsed from the data-* attributes on div.thing, NOT from nested CSS classes.
+# Those attributes carry the score, comment count, timestamp and permalink
+# directly, and survive cosmetic markup changes that would break a selector
+# chain like "div.score.unvoted". data-score is also correct when the visible
+# score is hidden as a bullet during a post's first hour.
+_THING_OPEN_RE = re.compile(r"<div[^>]*\bclass=\"[^\"]*\bthing\b[^\"]*\"[^>]*>", re.I)
+_ATTR_RE = re.compile(r"data-([a-z0-9-]+)=\"([^\"]*)\"", re.I)
+_TITLE_RE = re.compile(
+    r"<a[^>]*\bclass=\"[^\"]*\btitle\b[^\"]*\"[^>]*>(.*?)</a>", re.I | re.S)
+_FLAIR_RE = re.compile(
+    r"<span[^>]*\bclass=\"[^\"]*linkflairlabel[^\"]*\"[^>]*\btitle=\"([^\"]*)\"", re.I)
+
+
+def is_reddit_html(url: str) -> bool:
+    """True for a reddit listing URL we should scrape as HTML rather than RSS."""
+    p = urlparse(url)
+    host = p.netloc.lower()
+    if not (host == "reddit.com" or host.endswith(".reddit.com")):
+        return False
+    return not p.path.rstrip("/").endswith("/.rss")
+
+
+def parse_reddit_html(html: str, cutoff: dt.datetime,
+                      max_entries: int) -> tuple[list[dict], int, Counter]:
+    """Extract posts from an old.reddit listing. Returns (items, seen, drops)."""
+    opens = list(_THING_OPEN_RE.finditer(html))
+    items: list[dict] = []
+    drops: Counter = Counter()
+
+    for n, m in enumerate(opens[:max_entries]):
+        block = html[m.end():opens[n + 1].start() if n + 1 < len(opens) else len(html)]
+        attrs = dict(_ATTR_RE.findall(m.group(0)))
+
+        if attrs.get("promoted") == "true":          # sponsored slot, not a post
+            drops["promoted"] += 1
+            continue
+        permalink = attrs.get("permalink") or attrs.get("url") or ""
+        if not permalink.startswith("/r/"):          # ads/crossposts point elsewhere
+            drops["missing_fields"] += 1
+            continue
+
+        published = None
+        ts = attrs.get("timestamp")
+        if ts and ts.isdigit():
+            published = dt.datetime.fromtimestamp(int(ts) / 1000, dt.timezone.utc)
+        if published is None:
+            if DATELESS_POLICY == "drop":
+                drops["no_date"] += 1
+                continue
+        elif published < cutoff:
+            drops["too_old"] += 1
+            continue
+
+        tm = _TITLE_RE.search(block)
+        title = _clean(tm.group(1)) if tm else ""
+        if not title:
+            drops["missing_fields"] += 1
+            continue
+
+        # No post body is present in a listing — only self-post teasers, and not
+        # reliably. Synthesise the snippet from what IS here: the subreddit, the
+        # flair (r/Scams flairs posts "Is this a scam?" etc.), and engagement.
+        # Without this the gatekeeper would score every Reddit item on a bare
+        # title and reject most of them.
+        sub = attrs.get("subreddit-prefixed") or "reddit"
+        fm = _FLAIR_RE.search(block)
+        bits = [sub]
+        if fm:
+            bits.append(_clean(fm.group(1)))
+        bits.append(f"{attrs.get('score', '0')} points")
+        bits.append(f"{attrs.get('comments-count', '0')} comments")
+        if attrs.get("nsfw") == "true":
+            bits.append("NSFW")
+        snippet = " · ".join(b for b in bits if b)[:SNIPPET_CHARS]
+
+        reason = _prefilter(title, snippet)
+        if reason:
+            drops[reason] += 1
+            continue
+
+        link = urljoin("https://www.reddit.com", permalink)
+        items.append({
+            "id": hashlib.sha1(link.encode()).hexdigest()[:12],
+            "title": title,
+            "url": link,
+            "source": "reddit.com",
+            "snippet": snippet,
+            "published": published.isoformat() if published else None,
+        })
+    return items, len(opens), drops
+
+
+def _parse_reddit_feed(url: str, cutoff: dt.datetime, max_entries: int,
+                       rec: dict) -> dict:
+    """parse_feed's branch for old.reddit HTML listings."""
+    rec["source"] = "reddit.com"
+    resp, status, detail = _http_get(url)
+    rec["detail"] = detail
+    if resp is None:
+        rec["status"] = status
+        return rec
+
+    rec["feed_url"] = url
+    items, seen, drops = parse_reddit_html(resp.text or "", cutoff, max_entries)
+    rec["entries_seen"] = seen
+    rec["items"] = items
+    rec["kept"] = len(items)
+    rec["dropped"] = dict(drops)
+    if items:
+        rec["status"] = "OK"
+    elif seen == 0:
+        # Zero div.thing on a 200 means the markup moved or the sub is private.
+        rec["status"] = "NO_FEED"
+        rec["detail"] = rec["detail"] or "no posts found in listing HTML"
+    elif drops.get("too_old", 0) == seen:
+        rec["status"] = "STALE"
+    else:
+        rec["status"] = "FILTERED"
+    return rec
+
+
 def parse_feed(url: str, cutoff: dt.datetime, max_entries: int | None = None) -> dict:
     """Fetch one source. Returns a report record including its items.
 
@@ -397,6 +536,10 @@ def parse_feed(url: str, cutoff: dt.datetime, max_entries: int | None = None) ->
     rec = {"url": url, "source": urlparse(url).netloc.replace("www.", ""),
            "feed_url": None, "status": None, "detail": "",
            "entries_seen": 0, "kept": 0, "dropped": {}, "items": []}
+    max_entries = MAX_PER_FEED if max_entries is None else max_entries
+
+    if is_reddit_html(url):
+        return _parse_reddit_feed(url, cutoff, max_entries, rec)
 
     feed_url, parsed, status, detail = discover_feed(url)
     rec["feed_url"], rec["detail"] = feed_url, detail
@@ -406,7 +549,6 @@ def parse_feed(url: str, cutoff: dt.datetime, max_entries: int | None = None) ->
 
     all_entries = list(parsed.entries)
     rec["entries_seen"] = len(all_entries)
-    max_entries = MAX_PER_FEED if max_entries is None else max_entries
     entries = all_entries[:max_entries]
     if not entries:
         rec["status"] = "EMPTY"

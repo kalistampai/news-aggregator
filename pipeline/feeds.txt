@@ -15,12 +15,10 @@
 # expected. Only CAPTCHA / 4xx / 5xx / DNS / NO_FEED are real problems. Never
 # prune a feed for being STALE — that is exactly when its next post matters.
 #
-# Current count: 199 active sources.  209 - 10 (14 Reddit lines merged into 4
-# multireddits, 2026-08-13). 55 of the 199 feed the "Scams & Fraud" section —
-# fewer LINES than before but far more ARTICLES, since each multireddit returns
-# 100 entries in ONE request instead of 25 across fourteen that all 429'd.
-# Reddit requests are the scarce resource here, not Reddit feeds: every extra
-# line spends the same per-IP budget, so keep subreddits grouped.
+# Current count: 206 active sources.  199 + 7 (Reddit moved from .rss feeds to
+# old.reddit HTML listings, one line per subreddit, 2026-08-14).
+# 63 of the 206 feed the "Scams & Fraud" section, 11 of those from Reddit.
+# Reddit is scoped to scam subreddits only; see the Reddit block below.
 # Pruning method: 3 confirmation passes + a browser-UA retest, so only PERSISTENT
 # hard failures were cut. Transients (Reddit 429/403) were deliberately kept.
 #
@@ -200,10 +198,15 @@ https://embracethered.com/blog/index.xml
 # NOTE: Reddit aggressively blocks datacenter IPs. These may log HTTP_403 from
 # GitHub Actions even though they work from your laptop. Check the health panel
 # after the first run; if they 403 persistently, comment them out.
-# Merged into one multireddit for the same reason as the scam groups below: each
-# reddit.com request spends the same per-IP rate-limit budget, so three lines
-# here were competing with the scam groups and losing. One request, ?limit=100.
-https://www.reddit.com/r/LocalLLaMA+MachineLearning+singularity/.rss?limit=100
+# DISABLED 2026-08-14: Reddit is scoped to the Scams & Fraud section for now.
+# This line was .rss, which is capped at ~1 request/50s and returned HTTP_429
+# every run, so it was contributing nothing anyway. If the scam listings prove
+# out on Actions, re-enable these by uncommenting the three HTML lines below —
+# they use the same old.reddit path as the scam feeds and cost ~3 requests of a
+# ~100 budget. Do NOT restore the .rss form.
+# https://old.reddit.com/r/LocalLLaMA/new/?limit=100
+# https://old.reddit.com/r/MachineLearning/new/?limit=100
+# https://old.reddit.com/r/singularity/new/?limit=100
 
 # --- World News ---
 https://www.mintpressnews.com/feed/
@@ -278,29 +281,49 @@ https://www.fraudsmart.ie/feed/
 #   429  -> still bursting; raise REDDIT_MIN_INTERVAL (try 15-20).
 #   403  -> Reddit refusing the datacenter IP class. No spacing fixes that;
 #           comment these out, they will never work from CI.
-# MULTIREDDITS, NOT ONE LINE PER SUBREDDIT — this is the whole fix for the
-# HTTP_429 that zeroed this tier. Reddit rate-limits per IP (~10 req/min
-# unauthenticated), so 11 separate requests failed no matter how far apart they
-# were spaced. "r/a+b+c/.rss" returns all of them in ONE request, and
-# "?limit=100" raises the page from 25 entries to 100. Three requests instead
-# of eleven, each carrying ~100 entries: verified HTTP 200 with 100 entries.
+# old.reddit.com HTML, NOT .rss — and this is not a style preference.
 #
-# Keep these grouped. Splitting them back into one-line-per-subreddit is what
-# broke it. To add a subreddit, append "+Name" to whichever group fits.
+# Measured 2026-08-14 from Reddit's own x-ratelimit-* response headers:
+#   www.reddit.com/....rss     -> remaining 0.0 after ONE request (50s reset)
+#   old.reddit.com/....rss     -> HTTP 429, remaining 0.0
+#   old.reddit.com/r/x/ (HTML) -> HTTP 200, remaining 94-99 (488s reset)
 #
-# IF THE HEALTH PANEL STILL SHOWS 429 FOR THESE, escalate in this order:
-#   1. Merge all three groups into ONE line (one request/run). Cheapest fix —
-#      costs breadth of a single page, needs no code and no credentials.
-#   2. Raise REDDIT_MIN_INTERVAL to 20-30 in daily.yml.
-#   3. Switch to Reddit's OAuth API. Registering a free script app lifts the
-#      ceiling from ~10 req/min to ~100 QPM and is the only real fix if these
-#      keep failing — it needs a client id/secret in repo secrets and a token
-#      call in ingest.py.
-# A 403 rather than 429 means something else entirely: Reddit refusing the
-# runner's IP class, which none of the above fixes — that is the proxy case.
-https://www.reddit.com/r/Scams+ScamsOnReddit+TheScamReport+ScamCenter/.rss?limit=100
-https://www.reddit.com/r/FraudPrevention+IdentityTheft+scammers/.rss?limit=100
-https://www.reddit.com/r/scambait+ScamAwarenessUK+CryptoScams+romance_scams/.rss?limit=100
+# The bucket is split by ENDPOINT TYPE, not by hostname. The .rss budget is
+# roughly one request per 50 seconds, which is why no REDDIT_MIN_INTERVAL value
+# ever worked and why batching subreddits into "r/a+b+c/.rss" only masked it.
+# The HTML listing is a different bucket about 100x larger.
+#
+# Because requests are no longer scarce, these are one line per subreddit
+# again: a multireddit returns 100 posts SHARED across its subs, starving the
+# quiet ones, while 11 separate requests each get their own 100-post page for
+# ~11 of a ~100 budget.
+#
+# ingest.py scrapes these via parse_reddit_html(), reading the data-* attributes
+# on div.thing rather than nested CSS classes, so cosmetic markup changes do not
+# break it. Listings carry no post body, so the snippet is synthesised from
+# subreddit + flair + score + comment count.
+#
+# .json is NOT an option: www and old both return HTTP 403 to server-side
+# requests regardless of User-Agent (checked 2026-08-14). It only works in a
+# browser because of session cookies.
+#
+# IF THESE FAIL ON ACTIONS:
+#   HTTP_429 -> raise OLD_REDDIT_MIN_INTERVAL (default 2s), or cut the list.
+#   HTTP_403 -> Reddit is refusing the runner's datacenter IP. No spacing or
+#               parsing change fixes that; it needs a proxy, and at that point
+#               dropping Reddit is the reasonable call.
+#   NO_FEED  -> the listing markup moved. Check parse_reddit_html selectors.
+https://old.reddit.com/r/Scams/new/?limit=100
+https://old.reddit.com/r/scambait/new/?limit=100
+https://old.reddit.com/r/scammers/new/?limit=100
+https://old.reddit.com/r/FraudPrevention/new/?limit=100
+https://old.reddit.com/r/IdentityTheft/new/?limit=100
+https://old.reddit.com/r/CryptoScams/new/?limit=100
+https://old.reddit.com/r/ScamCenter/new/?limit=100
+https://old.reddit.com/r/ScamAwarenessUK/new/?limit=100
+https://old.reddit.com/r/TheScamReport/new/?limit=100
+https://old.reddit.com/r/ScamsOnReddit/new/?limit=100
+https://old.reddit.com/r/romance_scams/new/?limit=100
 
 # -- Regulators & law enforcement: enforcement actions, investor warnings --
 https://www.fca.org.uk/news/rss.xml       # FCA investment-scam warnings, high cadence
