@@ -47,6 +47,10 @@ MAX_PER_SOURCE = int(os.environ.get("MAX_PER_SOURCE", "12"))   # after dedupe, p
 #   2. Seven scam sources hit exactly 12 on 2026-08-13 and were truncated.
 # Per-feed counting means one scam subreddit can no longer starve the others.
 MAX_PER_PRIORITY_SOURCE = int(os.environ.get("MAX_PER_PRIORITY_SOURCE", "30"))
+# Priority feeds also read deeper into each feed. This matters for the Reddit
+# multireddits: one request returns 100 entries, and the normal MAX_PER_FEED of
+# 25 would throw away 75 of them for no benefit — the request is already paid for.
+MAX_PER_PRIORITY_FEED = int(os.environ.get("MAX_PER_PRIORITY_FEED", "100"))
 PRIORITY_SECTIONS = {"scam / fraud alerts"}
 MAX_TOTAL = int(os.environ.get("MAX_TOTAL", "1500"))           # global safety valve
 SNIPPET_CHARS = int(os.environ.get("SNIPPET_CHARS", "600"))
@@ -57,8 +61,12 @@ MAX_WORKERS = int(os.environ.get("INGEST_WORKERS", "16"))      # 194 feeds -> ra
 # costs you those sources. See the README note before switching.
 DATELESS_POLICY = os.environ.get("DATELESS_POLICY", "keep").lower()
 
-USER_AGENT = ("Mozilla/5.0 (compatible; BriefingBot/1.0; "
-              "+https://github.com/) FeedFetcher")
+# Reddit (and a few WAFs) throttle generic or placeholder agents harder, and
+# "+https://github.com/" named no real contact. Pointing at the actual repo is
+# what Reddit's API etiquette asks for and costs nothing.
+USER_AGENT = os.environ.get("FEED_USER_AGENT", (
+    "Mozilla/5.0 (compatible; BriefingBot/1.0; "
+    "+https://github.com/kalistampai/news-aggregator) FeedFetcher"))
 
 # ---- per-host throttle ------------------------------------------------------
 # INGEST_WORKERS threads ignore whose server they are hitting. That is fine when
@@ -300,8 +308,12 @@ def discover_feed(url: str):
     """Resolve a parseable feed. Returns (feed_url, parsed, status, detail)."""
     host = urlparse(url).netloc
     if "reddit.com" in host:
-        u = url.rstrip("/")
-        url = u if u.endswith("/.rss") else u + "/.rss"
+        # Query-aware: multireddit feeds carry "?limit=100", so testing the whole
+        # URL for a "/.rss" suffix would append a SECOND one and 404 the feed.
+        parts = urlparse(url)
+        path = parts.path.rstrip("/")
+        if not path.endswith("/.rss"):
+            url = parts._replace(path=path + "/.rss").geturl()
     elif "news.ycombinator.com" in host:
         url = "https://news.ycombinator.com/rss"
 
@@ -376,8 +388,12 @@ def _prefilter(title: str, snippet: str) -> str | None:
     return None
 
 
-def parse_feed(url: str, cutoff: dt.datetime) -> dict:
-    """Fetch one source. Returns a report record including its items."""
+def parse_feed(url: str, cutoff: dt.datetime, max_entries: int | None = None) -> dict:
+    """Fetch one source. Returns a report record including its items.
+
+    max_entries defaults to MAX_PER_FEED; main() passes the larger priority
+    ceiling for lead-section feeds. Optional so feedcheck.py keeps working.
+    """
     rec = {"url": url, "source": urlparse(url).netloc.replace("www.", ""),
            "feed_url": None, "status": None, "detail": "",
            "entries_seen": 0, "kept": 0, "dropped": {}, "items": []}
@@ -390,7 +406,8 @@ def parse_feed(url: str, cutoff: dt.datetime) -> dict:
 
     all_entries = list(parsed.entries)
     rec["entries_seen"] = len(all_entries)
-    entries = all_entries[:MAX_PER_FEED]
+    max_entries = MAX_PER_FEED if max_entries is None else max_entries
+    entries = all_entries[:max_entries]
     if not entries:
         rec["status"] = "EMPTY"
         return rec
@@ -485,13 +502,23 @@ def write_report(records: list[dict], kept_after_dedupe: int,
 def main() -> None:
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=LOOKBACK_HOURS)
     feeds = load_feed_urls()
-    print(f"[ingest] {len(feeds)} sources | lookback {LOOKBACK_HOURS}h | "
-          f"workers {MAX_WORKERS} | dateless={DATELESS_POLICY} | "
+    feed_sections = load_feed_sections()
+    n_priority = sum(1 for u in feeds
+                     if feed_sections.get(u, "") in PRIORITY_SECTIONS)
+    print(f"[ingest] {len(feeds)} sources ({n_priority} priority) | "
+          f"lookback {LOOKBACK_HOURS}h | workers {MAX_WORKERS} | "
+          f"dateless={DATELESS_POLICY} | "
           f"allowlist={'on' if ALLOWLIST_MODE else 'off'}", flush=True)
 
     records: list[dict] = []
     with cf.ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {pool.submit(parse_feed, u, cutoff): u for u in feeds}
+        futures = {
+            pool.submit(parse_feed, u, cutoff,
+                        MAX_PER_PRIORITY_FEED
+                        if feed_sections.get(u, "") in PRIORITY_SECTIONS
+                        else MAX_PER_FEED): u
+            for u in feeds
+        }
         for fut in cf.as_completed(futures):
             u = futures[fut]
             try:
@@ -541,11 +568,10 @@ def main() -> None:
     # Dedupe by URL, then normalized title; cap per source; global safety valve.
     # Priority-section feeds are counted per FEED and against the larger budget;
     # everything else keeps the original per-host cap.
-    sections = load_feed_sections()
     seen_url, seen_title, per_source = set(), set(), Counter()
     deduped: list[dict] = []
     for rec in sorted(records, key=lambda r: r["source"]):
-        priority = sections.get(rec["url"], "") in PRIORITY_SECTIONS
+        priority = feed_sections.get(rec["url"], "") in PRIORITY_SECTIONS
         cap = MAX_PER_PRIORITY_SOURCE if priority else MAX_PER_SOURCE
         cap_key = rec["url"] if priority else rec["source"]
         for it in rec["items"]:
