@@ -143,7 +143,7 @@ jobs:
 
           # ---- summarization ceiling -------------------------------------
           GATEKEEPER_BATCH_SIZE: "30"
-          MAX_FEATURES: "120"      # overflow spills to also_notable, never dropped
+          MAX_FEATURES: "200"      # overflow spills to also_notable, never dropped
           # 20, not 10. Each batch is one request against a 5 RPM ceiling, so
           # halving the request count matters far more than keeping payloads
           # small. TPM is at 3% of 250K, so the bigger payloads cost nothing.
