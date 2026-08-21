@@ -22,7 +22,7 @@
      does not match BUILD in script.js, the browser/CDN is serving a stale
      style.css and the page says so out loud instead of failing silently.
      Bump this together with ?v=, data-build, and BUILD. */
-  --build: "2026-08-20a";
+  --build: "2026-08-20b";
 }
 
 * { box-sizing: border-box; }
@@ -107,6 +107,17 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .modeltag[data-state="busy"] { animation: none; }
 }
+
+/* What the day's briefing cost, sat next to the model that produced it.
+   Deliberately quieter than .modeltag and with no alert states: a large number
+   is information, not a fault, and it must not compete with a real failover. */
+.tokentag {
+  font-family: var(--mono); font-size: .66rem; letter-spacing: .06em;
+  padding: .24rem .5rem; border: 1px dotted var(--line); border-radius: 2px;
+  color: var(--ink-faint); white-space: nowrap; cursor: help;
+}
+.tokentag[data-state="stale"] { opacity: .55; }
+.tokentag[hidden] { display: none; }
 
 .masthead__sub { margin: .5rem 0 0; color: var(--ink-dim); font-size: .92rem; }
 .masthead__sub a {

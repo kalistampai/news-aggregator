@@ -284,6 +284,7 @@ _EFFECTIVE: dict[str, dict[str, int]] = {}   # stage -> {model answered: count}
 _PRIMARY: dict[str, str] = {}                # stage -> resolved first choice
 _EVENTS: list[str] = []                      # human-readable failover log
 _ALERTS: list[str] = []                      # things a human must fix
+_USAGE: dict[str, dict[str, int]] = {}       # stage -> token totals for the run
 _MAX_EVENTS = 40
 _display_lock = threading.Lock()
 
@@ -292,6 +293,69 @@ def _record_success(stage: str, answered: str) -> None:
     with _display_lock:
         _EFFECTIVE.setdefault(stage, {})
         _EFFECTIVE[stage][answered] = _EFFECTIVE[stage].get(answered, 0) + 1
+
+
+# Token accounting. Both stages call the chain many times per run (one request
+# per gatekeeper/editor batch), so these are RUN TOTALS, not per-request values.
+#
+# NOT A BILLING FIGURE. Only responses that actually came back are counted: a
+# request that errored or timed out has no usage object to read, yet may still
+# have been charged. Treat this as "what the published briefing cost", which is
+# the question the dashboard is answering, and expect it to read slightly low on
+# a night with retries.
+_USAGE_FIELDS = ("prompt", "completion", "reasoning", "total")
+
+
+def _first_int(obj, *names) -> int:
+    """First present, non-None, int-able attribute among `names`. 0 if none."""
+    for n in names:
+        v = getattr(obj, n, None)
+        if v is None:
+            continue
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            continue
+    return 0
+
+
+def _usage_of(resp) -> dict[str, int] | None:
+    """Token counts from a provider response, or None when it reports none.
+
+    Spans three shapes without branching on which provider we are in: OpenAI
+    Responses (input/output_tokens), OpenAI chat.completions (prompt/completion
+    _tokens) and Gemini (usage_metadata.*_token_count). Returning None rather
+    than zeros keeps a provider that omits usage — or a test double that never
+    had it — out of the totals instead of silently reporting 0.
+    """
+    u = getattr(resp, "usage", None) or getattr(resp, "usage_metadata", None)
+    if u is None:
+        return None
+    prompt = _first_int(u, "input_tokens", "prompt_tokens", "prompt_token_count")
+    completion = _first_int(u, "output_tokens", "completion_tokens",
+                            "candidates_token_count")
+    # Reasoning tokens are billed as output and are already inside the output
+    # count on both providers; they are broken out only so the tooltip can show
+    # how much of the spend was the model thinking rather than writing.
+    details = (getattr(u, "output_tokens_details", None)
+               or getattr(u, "completion_tokens_details", None))
+    reasoning = (_first_int(details, "reasoning_tokens") if details is not None
+                 else _first_int(u, "thoughts_token_count"))
+    total = _first_int(u, "total_tokens", "total_token_count") or (prompt + completion)
+    if not total:
+        return None
+    return {"prompt": prompt, "completion": completion,
+            "reasoning": reasoning, "total": total}
+
+
+def _record_usage(stage: str, usage: dict[str, int] | None) -> None:
+    if not usage:
+        return
+    with _display_lock:
+        bucket = _USAGE.setdefault(stage, {k: 0 for k in _USAGE_FIELDS})
+        bucket["calls"] = bucket.get("calls", 0) + 1
+        for k in _USAGE_FIELDS:
+            bucket[k] += usage.get(k, 0)
 
 
 def _event(msg: str) -> None:
@@ -330,6 +394,7 @@ def stage_report(stage: str, configured: str | None = None) -> dict:
         primary = _PRIMARY.get(stage, configured or stage)
         events = list(_EVENTS)
         alerted = list(_ALERTS)
+        usage = dict(_USAGE.get(stage, {})) or None
     effective = max(counts, key=counts.get) if counts else None
     return {
         "configured": configured or stage,
@@ -339,6 +404,9 @@ def stage_report(stage: str, configured: str | None = None) -> dict:
         "fell_back": bool(effective and effective != primary),
         "events": events,
         "alerts": alerted,
+        # None (not zeros) when no response carried usage, so the dashboard can
+        # tell "this run reported nothing" apart from "this run cost nothing".
+        "usage": usage,
     }
 
 
@@ -355,6 +423,7 @@ def reset_state() -> None:
         _PRIMARY.clear()
         _EVENTS.clear()
         _ALERTS.clear()
+        _USAGE.clear()
     _RESOLVED.clear()
 
 
@@ -621,7 +690,7 @@ def _openai_text(model: str, system_prompt: str, user_payload: str,
         "max_completion_tokens": budget,
         "response_format": {"type": "json_object"},
     }
-    return _openai_call(client.chat.completions, kwargs, "choices")
+    return _openai_call(client.chat.completions, kwargs, "choices")   # (text, usage)
 
 
 # A parameter the API rejects, and the equivalent to try instead (if any).
@@ -629,8 +698,12 @@ _PARAM_ALIAS = {"max_completion_tokens": "max_tokens",
                 "max_output_tokens": "max_tokens"}
 
 
-def _openai_call(target, kwargs: dict, shape: str) -> str:
-    """Invoke the SDK, correcting one rejected parameter per attempt."""
+def _openai_call(target, kwargs: dict, shape: str) -> tuple[str, dict | None]:
+    """Invoke the SDK, correcting one rejected parameter per attempt.
+
+    Returns (text, usage). `usage` is None when the response carried no token
+    counts — see _usage_of.
+    """
     create = target if callable(target) else target.create
     for _ in range(3):                     # at most two parameter corrections
         try:
@@ -652,18 +725,20 @@ def _openai_call(target, kwargs: dict, shape: str) -> str:
     else:
         raise RuntimeError("exhausted parameter corrections")
 
+    usage = _usage_of(resp)
     if shape == "output_text":
         text = getattr(resp, "output_text", None)
         if text:
-            return text
+            return text, usage
         # Older/newer response shapes: walk the content blocks.
         chunks = []
         for item in getattr(resp, "output", None) or []:
             for block in getattr(item, "content", None) or []:
                 chunks.append(getattr(block, "text", "") or "")
-        return "".join(chunks)
+        return "".join(chunks), usage
     choices = getattr(resp, "choices", None) or []
-    return (getattr(choices[0].message, "content", "") or "") if choices else ""
+    text = (getattr(choices[0].message, "content", "") or "") if choices else ""
+    return text, usage
 
 
 def _unsupported_param(exc: Exception, kwargs: dict) -> str | None:
@@ -751,12 +826,12 @@ def _gemini_config(system_prompt: str, max_tokens: int):
 
 
 def _gemini_text(model: str, system_prompt: str, user_payload: str,
-                 max_tokens: int) -> str:
+                 max_tokens: int) -> tuple[str, dict | None]:
     resp = _client_or_new().models.generate_content(
         model=model, contents=user_payload,
         config=_gemini_config(system_prompt, max_tokens),
     )
-    return resp.text
+    return resp.text, _usage_of(resp)
 
 
 # ---- request ----------------------------------------------------------------
@@ -778,15 +853,18 @@ def _extract_json(text: str | None):
 
 def _complete_one_model(system_prompt: str, user_payload: str, model: str,
                         max_tokens: int):
-    """Call ONE model with forced-JSON output, retrying BUSY/SOFT failures."""
+    """Call ONE model with forced-JSON output, retrying BUSY/SOFT failures.
+
+    Returns (parsed, usage); usage is None when the response reported none.
+    """
     provider, bare = split_model(model)
     generate = _openai_text if provider == OPENAI else _gemini_text
     last_err: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
             _throttle(provider)
-            return _extract_json(
-                generate(bare, system_prompt, user_payload, max_tokens))
+            text, usage = generate(bare, system_prompt, user_payload, max_tokens)
+            return _extract_json(text), usage
         except Exception as exc:  # noqa: BLE001
             last_err = exc
             if attempt < MAX_RETRIES - 1 and classify(exc) in (BUSY, SOFT):
@@ -842,8 +920,10 @@ def complete_json(system_prompt: str, user_payload: str, model: str,
             _event(f"skipping {m} — already ruled out earlier in this run")
             continue
         try:
-            result = _complete_one_model(system_prompt, user_payload, m, max_tokens)
+            result, usage = _complete_one_model(system_prompt, user_payload, m,
+                                                max_tokens)
             _record_success(key, m)            # DISPLAY ONLY — never routing
+            _record_usage(key, usage)          # DISPLAY ONLY — never routing
             if m != primary:
                 _event(f"{m} answered this request (first choice was {primary})")
             return result

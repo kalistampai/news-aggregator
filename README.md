@@ -104,14 +104,38 @@ The tooltip carries the configured model, the gatekeeper's model, and the failov
 "models": {
   "editor":     {"configured": "openai:gpt-5.6-sol", "primary": "openai:gpt-5.6-sol",
                  "effective": "openai:gpt-5.6-terra",
-                 "counts": {"openai:gpt-5.6-terra": 6}, "fell_back": true},
+                 "counts": {"openai:gpt-5.6-terra": 6}, "fell_back": true,
+                 "usage": {"prompt": 120000, "completion": 40000,
+                           "reasoning": 9000, "total": 160000, "calls": 11}},
   "gatekeeper": {"configured": "openai:gpt-5.6-sol", "primary": "openai:gpt-5.6-sol",
                  "effective": "openai:gpt-5.6-sol",
-                 "counts": {"openai:gpt-5.6-sol": 5}, "fell_back": false},
+                 "counts": {"openai:gpt-5.6-sol": 5}, "fell_back": false,
+                 "usage": {"prompt": 600000, "completion": 90000,
+                           "reasoning": 20000, "total": 690000, "calls": 34}},
   "events": ["openai:gpt-5.6-sol is overloaded (503) — trying the next: openai:gpt-5.6-terra"],
   "alerts": []
 }
 ```
+
+### Token usage
+`usage` is the token cost of the day's run, accumulated per stage across every batch
+(one request per gatekeeper/editor batch, hence `calls`). The dashboard sums both
+stages and shows the total next to the model tag as `850K tokens`; the tooltip breaks
+it down by stage and by input/output, and calls out how much of the output was
+reasoning tokens — those are billed as output and are already inside the output count,
+not additional to it.
+
+Two deliberate choices:
+
+* **`usage` is `null`, never zeros, when nothing was reported.** A provider that omits
+  token counts and a run that genuinely cost nothing are different claims. The
+  dashboard hides the counter entirely for the first, rather than publishing a `0`
+  that looks like a measurement. Briefings archived before this landed have no `usage`
+  key at all and hide it the same way.
+* **It is not a billing figure, and the tooltip says so.** Only responses that came
+  back are counted; a request that errored or timed out has no usage object to read
+  yet may still have been charged. Expect it to read slightly low on a night with
+  retries.
 
 The record is keyed by **stage**, not by model id. Keying it by model id merged the
 two stages whenever both were configured to the same model, and on 2026-08-02 that

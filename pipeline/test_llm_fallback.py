@@ -122,9 +122,21 @@ class _Endpoint:
         text = _dispense(script if key in script else script,
                          key if key in script else model, self.parent.calls)
         if self.shape == "responses":
-            return pytypes.SimpleNamespace(output_text=text)
+            resp = pytypes.SimpleNamespace(output_text=text)
+            if self.parent.usage:
+                p, c, r = self.parent.usage
+                resp.usage = pytypes.SimpleNamespace(
+                    input_tokens=p, output_tokens=c, total_tokens=p + c,
+                    output_tokens_details=pytypes.SimpleNamespace(reasoning_tokens=r))
+            return resp
         msg = pytypes.SimpleNamespace(content=text)
-        return pytypes.SimpleNamespace(choices=[pytypes.SimpleNamespace(message=msg)])
+        resp = pytypes.SimpleNamespace(choices=[pytypes.SimpleNamespace(message=msg)])
+        if self.parent.usage:
+            p, c, r = self.parent.usage
+            resp.usage = pytypes.SimpleNamespace(
+                prompt_tokens=p, completion_tokens=c, total_tokens=p + c,
+                completion_tokens_details=pytypes.SimpleNamespace(reasoning_tokens=r))
+        return resp
 
 
 class _OpenAIModels:
@@ -142,9 +154,10 @@ class FakeOpenAI:
     """`script` maps a bare model id (or 'responses:<id>' / 'chat:<id>') to a
     response string, an exception, or a list consumed in order."""
 
-    def __init__(self, script, ids=None, no_responses_api=False):
+    def __init__(self, script, ids=None, no_responses_api=False, usage=None):
         self.script = script
         self.ids = ids
+        self.usage = usage          # (prompt, completion, reasoning) or None
         self.calls: list[str] = []
         self.kwargs: list[dict] = []
         self.list_calls = 0
@@ -159,8 +172,14 @@ class _GeminiModels:
     def __init__(self, parent): self.parent = parent
 
     def generate_content(self, model, contents, config):
-        return pytypes.SimpleNamespace(
+        resp = pytypes.SimpleNamespace(
             text=_dispense(self.parent.script, model, self.parent.calls))
+        if self.parent.usage:
+            p, c, r = self.parent.usage
+            resp.usage_metadata = pytypes.SimpleNamespace(
+                prompt_token_count=p, candidates_token_count=c,
+                total_token_count=p + c, thoughts_token_count=r)
+        return resp
 
     def list(self, *a, **kw):
         self.parent.list_calls += 1
@@ -168,19 +187,21 @@ class _GeminiModels:
 
 
 class FakeGemini:
-    def __init__(self, script):
+    def __init__(self, script, usage=None):
         self.script = script
+        self.usage = usage          # (prompt, completion, reasoning) or None
         self.calls: list[str] = []
         self.list_calls = 0
         self.models = _GeminiModels(self)
 
 
 def scripted(openai_script=None, gemini_script=None, ids=None,
-             no_responses_api=False):
+             no_responses_api=False, usage=None):
     """Install fake clients for both providers and clear all per-process state."""
     llm.reset_state()
-    oa = FakeOpenAI(openai_script or {}, ids=ids, no_responses_api=no_responses_api)
-    gm = FakeGemini(gemini_script or {})
+    oa = FakeOpenAI(openai_script or {}, ids=ids,
+                    no_responses_api=no_responses_api, usage=usage)
+    gm = FakeGemini(gemini_script or {}, usage=usage)
     llm._openai_client = oa
     llm._client = gm
     return oa, gm
@@ -533,6 +554,61 @@ def test_each_stage_reports_its_own_model():
         assert llm.stage_report("editor", SOL)["effective"] == SOL
     finally:
         llm.LLM_BUSY_COOLDOWN = 120
+
+
+# ---- token accounting -------------------------------------------------------
+def test_token_usage_accumulates_across_calls():
+    # Both stages call the chain once per batch, so the reported figure has to be
+    # the run total, not whatever the last request happened to cost.
+    scripted(openai_script={bare(SOL): [GOOD_JSON, GOOD_JSON, GOOD_JSON]},
+             usage=(100, 40, 10))
+    with redirect_stdout(io.StringIO()):
+        for _ in range(3):
+            llm.complete_json("sys", "p", SOL, fallback_models=[], stage="editor")
+
+    u = llm.stage_report("editor", SOL)["usage"]
+    assert u["calls"] == 3, u
+    assert u["prompt"] == 300 and u["completion"] == 120, u
+    assert u["total"] == 420, u
+    assert u["reasoning"] == 30, u
+
+
+def test_token_usage_is_attributed_per_stage():
+    # Same bug class as the model label: the editor must not inherit tokens the
+    # gatekeeper spent, even when both are configured to the same model.
+    scripted(openai_script={bare(SOL): [GOOD_JSON, GOOD_JSON]}, usage=(50, 25, 0))
+    with redirect_stdout(io.StringIO()):
+        llm.complete_json("sys", "p", SOL, fallback_models=[], stage="gatekeeper")
+        llm.complete_json("sys", "p", SOL, fallback_models=[], stage="editor")
+
+    assert llm.stage_report("gatekeeper", SOL)["usage"]["total"] == 75
+    assert llm.stage_report("editor", SOL)["usage"]["total"] == 75
+    assert llm.stage_report("nobody", SOL)["usage"] is None
+
+
+def test_gemini_usage_is_read_from_its_own_field_name():
+    # Gemini reports usage_metadata.*_token_count, not usage.*_tokens. Reading
+    # only the OpenAI shape would silently report zero on every failover night.
+    scripted(openai_script={bare(SOL): busy_openai()},
+             gemini_script={bare(FLOOR): GOOD_JSON}, usage=(200, 60, 20))
+    with redirect_stdout(io.StringIO()):
+        llm.complete_json("sys", "p", SOL, fallback_models=[FLOOR], stage="editor")
+
+    u = llm.stage_report("editor", SOL)["usage"]
+    assert u["total"] == 260, u
+    assert u["reasoning"] == 20, u
+
+
+def test_a_response_without_usage_reports_none_not_zero():
+    # "The provider told us nothing" and "this run cost nothing" are different
+    # claims; the dashboard shows the count only for the first.
+    scripted(openai_script={bare(SOL): GOOD_JSON})       # no usage on the fake
+    with redirect_stdout(io.StringIO()):
+        llm.complete_json("sys", "p", SOL, fallback_models=[], stage="editor")
+
+    rep = llm.stage_report("editor", SOL)
+    assert rep["effective"] == SOL, "the call still has to be credited"
+    assert rep["usage"] is None, rep["usage"]
 
 
 # ---- runner -----------------------------------------------------------------

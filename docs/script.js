@@ -40,7 +40,7 @@ const CONFIG = {
    <body data-build>. A mismatch means one of the two files is stale — usually a
    cached script.js on GitHub Pages — which is exactly how a removed control ends
    up referenced by old code and throws "Cannot set properties of null". */
-const BUILD = "2026-08-20a";
+const BUILD = "2026-08-20b";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -147,6 +147,21 @@ function saveModelLabel(info) {
   catch (_) { /* storage unavailable — the label just won't survive a reload */ }
 }
 
+/* Token totals for one stage, or null when the pipeline recorded none. Guards
+   every field: a briefing from before token recording has no `usage` key at
+   all, and a provider that returns no counts leaves it null on purpose. */
+function usageOf(stage) {
+  const u = stage && stage.usage;
+  if (!u || typeof u !== "object") return null;
+  const n = (v) => (Number.isFinite(v) && v >= 0 ? v : 0);
+  const total = n(u.total) || n(u.prompt) + n(u.completion);
+  if (!total) return null;
+  return {
+    prompt: n(u.prompt), completion: n(u.completion),
+    reasoning: n(u.reasoning), total, calls: n(u.calls),
+  };
+}
+
 /* Pull the attribution out of a briefing. Returns null for briefings archived
    before the pipeline recorded it. */
 function modelInfoOf(data) {
@@ -154,6 +169,17 @@ function modelInfoOf(data) {
   const ed = m && m.editor;
   if (!ed || !ed.effective) return null;
   const gk = (m.gatekeeper || {});
+  const edUsage = usageOf(ed), gkUsage = usageOf(gk);
+  // The day's cost is both stages together — scoring every article is usually
+  // the larger half, so showing only the editor's spend would understate it.
+  const tokens = (edUsage || gkUsage) ? {
+    editor: edUsage,
+    gatekeeper: gkUsage,
+    total: (edUsage ? edUsage.total : 0) + (gkUsage ? gkUsage.total : 0),
+    reasoning: (edUsage ? edUsage.reasoning : 0) +
+               (gkUsage ? gkUsage.reasoning : 0),
+    calls: (edUsage ? edUsage.calls : 0) + (gkUsage ? gkUsage.calls : 0),
+  } : null;
   // `primary` is the first-choice id AFTER the pipeline resolved it against the
   // provider's real model list, so a configured family name that resolved to a
   // concrete id is not mistaken for a failover. Older briefings carry only
@@ -170,6 +196,7 @@ function modelInfoOf(data) {
     gatekeeperConfigured: gk.primary || gk.configured || null,
     alerts: Array.isArray(m.alerts) ? m.alerts.slice(0, 4) : [],
     events: Array.isArray(m.events) ? m.events.slice(0, 6) : [],
+    tokens,
     date: data.date || "",
   };
 }
@@ -183,6 +210,61 @@ function setModelBusy(text) {
   node.dataset.state = "busy";
   node.title = "Fetching the briefing — the model that produced it is shown here " +
                "once it loads.";
+  el("#tokenTag").hidden = true;   // nothing to count until a briefing loads
+}
+
+/* Compact so the masthead stays one line at phone width: a day's run is
+   typically six or seven figures, and the exact digit count is in the tooltip
+   for anyone who wants it. */
+function fmtTokens(n) {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 2).replace(/\.?0+$/, "") + "M";
+  if (n >= 1e4) return Math.round(n / 1e3) + "K";
+  return n.toLocaleString("en-US");
+}
+
+/* The token counter, rendered as a sibling of the model tag rather than as part
+   of its text: the model tag turns red on a failover or an alert, and the cost
+   of the run is not itself a fault condition. Driven only from renderModelTag()
+   so the two can never disagree about which day is on screen. */
+function renderTokenTag(info, { stale = false } = {}) {
+  const node = el("#tokenTag");
+  const t = info && info.tokens;
+  if (!t || !t.total) {
+    // Two different silences, and neither is "0 tokens": briefings archived
+    // before token recording landed, and providers that returned no usage.
+    node.hidden = true;
+    node.textContent = "";
+    node.removeAttribute("title");
+    return;
+  }
+  node.hidden = false;
+  node.textContent = `${fmtTokens(t.total)} tokens`;
+  node.dataset.state = stale ? "stale" : "ok";
+
+  const exact = (n) => n.toLocaleString("en-US");
+  const lines = [`Tokens used to produce this briefing: ${exact(t.total)}`];
+  const perStage = [["Editor (writes the cards)", t.editor],
+                    ["Gatekeeper (scores every article)", t.gatekeeper]];
+  for (const [label, u] of perStage) {
+    if (!u) continue;
+    lines.push(`  ${label}: ${exact(u.total)}` +
+               (u.calls ? ` over ${u.calls} request${u.calls === 1 ? "" : "s"}` : ""));
+  }
+  lines.push("", `Input: ${exact((t.editor ? t.editor.prompt : 0) +
+                                 (t.gatekeeper ? t.gatekeeper.prompt : 0))}`,
+             `Output: ${exact((t.editor ? t.editor.completion : 0) +
+                              (t.gatekeeper ? t.gatekeeper.completion : 0))}`);
+  if (t.reasoning) {
+    lines.push(`  of which reasoning: ${exact(t.reasoning)} ` +
+               "(billed as output, already counted above)");
+  }
+  // Said plainly rather than implied, because the number looks like a bill and
+  // is not one: a retried request that errored was charged but reported nothing.
+  lines.push("", "Counts successful responses only, so a night with retries " +
+                 "reads slightly low. Not a billing figure.");
+  if (stale) lines.push("", "From an earlier visit — no fresh briefing loaded.");
+  node.title = lines.join("\n");
 }
 
 function renderModelTag(info, { stale = false } = {}) {
@@ -192,9 +274,11 @@ function renderModelTag(info, { stale = false } = {}) {
     node.dataset.state = "unknown";
     node.title = "This briefing was archived before the pipeline recorded which " +
                  "model answered. Newer days show the model that produced them.";
+    renderTokenTag(null);
     return;
   }
   MODEL_LABEL = info;
+  renderTokenTag(info, { stale });
   const alerted = (info.alerts || []).length > 0;
   node.textContent = `via ${info.model}` +
     (info.fellBack ? " (fallback)" : "") + (alerted ? " ⚠" : "");
@@ -1173,6 +1257,7 @@ function renderError(msg) {
   node.textContent = "model unknown";
   node.dataset.state = "unknown";
   node.title = "No briefing loaded, and no model recorded from an earlier visit.";
+  renderTokenTag(null);
 }
 
 function escapeHtml(s) {
