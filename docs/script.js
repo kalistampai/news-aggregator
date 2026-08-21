@@ -4,13 +4,11 @@
    diffing and day-flipping all happen locally with no further requests. */
 
 /* ============================ CONFIG — EDIT GIST_ID ======================== */
+
 const CONFIG = {
-  // The Gist API endpoint returns the latest revision of ALL files (latest day
-  // + every dated archive + feed reports) and sends CORS headers. Unauthenticated
-  // reads are rate-limited to 60/hr per IP, which is what caps auto-refresh below.
-  GIST_ID: "368b2174f9c6e7a09df1eae9d814940f",
-  LATEST_FILE: "briefing.json",
-  LATEST_REPORT: "feedreport.json",
+  SUPABASE_URL: "https://baiojghilzxhkebfblzv.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_nfLVr5Krdld9pxxr4f2CYQ_bsn0TNxx",
+};
 
   // Fallback: a raw Gist URL WITHOUT the commit hash (…/raw/briefing.json) always
   // serves the newest content. Leave "" to skip. NOTE: the raw fallback can only
