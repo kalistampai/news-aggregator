@@ -6,9 +6,9 @@
 
 /* ====================== CONFIG — EDIT THE TWO SUPABASE VALUES ============== */
 const CONFIG = {
-  // Your project's REST endpoint, from Supabase -> Project Settings -> API.
-  SUPABASE_URL: "https://YOUR-PROJECT-ID.supabase.co",
-
+  SUPABASE_URL: "https://baiojghilzxhkebfblzv.supabase.co",
+  SUPABASE_ANON_KEY: "sb_publishable_nfLVr5Krdld9pxxr4f2CYQ_bsn0TNxx",
+};
   // The ANON (publishable) key — NOT the service_role key.
   //
   // Publishing this in a public repo is correct and intended: the anon key
