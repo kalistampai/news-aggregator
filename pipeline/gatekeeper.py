@@ -16,7 +16,7 @@ GATEKEEPER_STRICT=1 to restore hard-fail behaviour.
 Two failures are NOT skipped, at any strictness: every model being busy, and a
 fatal error (bad key / malformed request / unknown model / 429). Skipping those
 would silently score zero articles and publish an empty briefing over a good one.
-Aborting here means the Gist keeps yesterday's briefing untouched.
+Aborting here means Supabase keeps yesterday's briefing untouched.
 
 scored_articles.json carries a `meta` block recording which model actually
 answered — it rides through the editor into briefing.json so the dashboard can
@@ -54,7 +54,7 @@ PROMOTE_MAX = int(os.environ.get("PROMOTE_MAX", "6"))
 
 
 class EmptyScoringError(RuntimeError):
-    """Scoring produced nothing publishable — abort before overwriting the Gist."""
+    """Scoring produced nothing publishable — abort before overwriting the row."""
 # The chain (primary + ordered fallbacks, provider-prefixed) is defined in llm.py
 # so both stages and the workflow agree on one source of truth.
 FALLBACK_MODELS = GATEKEEPER_FALLBACK_MODELS
@@ -210,7 +210,7 @@ def main() -> None:
     # ZERO-YIELD GUARD. 130 articles in and nothing out is not a quiet news day,
     # it is a broken response contract — and continuing publishes a blank page
     # over yesterday's good briefing. Abort here instead: dispatch never runs and
-    # the Gist keeps what it has. EMPTY_OK=1 overrides for a genuine empty day.
+    # the stored briefing stands. EMPTY_OK=1 overrides for a genuine empty day.
     if not articles:
         # Ingest kept nothing — usually every candidate was already published in
         # an earlier run today. There is nothing to publish, and writing an empty

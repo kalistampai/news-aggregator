@@ -3,7 +3,7 @@ Stage 3 — Deep Synthesis & Structuring (The Editor Agent)
 
 Takes feature-tier articles, synthesizes 3-bullet cards grouped by category, and
 passes notable-tier items through verbatim. Writes briefing.json — the exact blob
-the dashboard renders and dispatch.py pushes to the Gist.
+the dashboard renders and dispatch.py stores in Supabase.
 
 CEILING: MAX_FEATURES is the only hard cap on how many articles get summarized.
 Anything above it is NO LONGER DISCARDED — the overflow spills into "also_notable"

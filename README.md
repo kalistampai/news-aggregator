@@ -2,14 +2,34 @@
 
 A four-stage agentic pipeline that fetches your RSS feeds, scores them against a strict
 offensive-security / OSINT / homelab profile, synthesizes the winners into a telegraphic
-briefing, and pushes the result to a GitHub Gist. A static GitHub Pages dashboard reads
-that Gist. **No server, no SMTP, no database.**
+briefing, and stores the result in Supabase Postgres. A static GitHub Pages dashboard
+reads it back. **No server, no SMTP.**
 
 ```
-feeds.txt ─► ingest ─► gatekeeper (GPT-5.6) ─► editor (GPT-5.6) ─► dispatch ─► Gist
+feeds.txt ─► ingest ─► gatekeeper (GPT-5.6) ─► editor (GPT-5.6) ─► dispatch ─► Supabase
                                                                       │
-                                               GitHub Pages dashboard ┘ (reads raw JSON)
+                                               GitHub Pages dashboard ┘ (anon key, RLS read-only)
 ```
+
+### Storage
+Three tables, created by `supabase/schema.sql`:
+
+| Table | Key | Holds |
+| --- | --- | --- |
+| `briefings` | `date` | the day's briefing, exactly the JSON the editor produced |
+| `feed_reports` | `date` | the slim feed-health snapshot the dashboard renders |
+| `seen_articles` | `id` | article ids already published, for cross-run dedupe |
+
+**Two keys, two jobs.** The pipeline writes with the **service_role** key, which
+bypasses Row Level Security — a full-database credential that lives only in Actions
+secrets. The dashboard reads with the **anon** key, which is committed to `docs/` on
+purpose: that is what an anon key is for, and RLS is what makes it safe. The policies
+in `schema.sql` grant it `SELECT` on `briefings` and `feed_reports` and nothing else.
+
+**RLS is load-bearing, not hygiene.** Supabase's default grants on the `public` schema
+give `anon` full DML, so with RLS disabled the key in `docs/script.js` is public *write*
+access. `seen_articles` carries RLS with no policy at all, which denies every role except
+`service_role`.
 
 ## Layout
 ```
@@ -20,15 +40,20 @@ news-aggregator/
 │   ├── ingest.py                 # stage 1: fetch + discover + dedupe
 │   ├── gatekeeper.py             # stage 2: batched relevance scoring + tiering
 │   ├── editor.py                 # stage 3: batched synthesis + URL re-attach
-│   ├── dispatch.py               # stage 4: PATCH the Gist
+│   ├── store.py                  # Supabase (PostgREST) client
+│   ├── migrate_from_gist.py      # one-shot: copy the old Gist archive across
+│   ├── dispatch.py               # stage 4: write the day's rows
 │   ├── llm.py                    # shared model client (OpenAI + Gemini, retries, failover)
 │   ├── test_llm_fallback.py      # offline simulation of the failover chain
 │   ├── test_gatekeeper_parsing.py # verdict-shape + empty-briefing guard tests
+│   ├── test_supabase_store.py    # persistence against a stub PostgREST
 │   ├── run.py                    # orchestrator (runs 1→4)
 │   ├── prompts/{gatekeeper,editor}.txt
 │   └── requirements.txt
 └── docs/                         # GitHub Pages root
     ├── index.html · style.css · script.js
+└── supabase/
+    └── schema.sql                 # tables + RLS policies (run once)
 ```
 
 ## Models
@@ -101,7 +126,7 @@ This value is **display only**. Nothing reads it back to decide what to call: ro
 always restarts from the configured model, so a model that was merely busy today is
 still tried first tomorrow. The dashboard mirrors it to `localStorage`
 (`dispatch.model.v1`) so the label still describes the output after a reload — including
-a reload that can't reach the Gist, where it is shown dimmed as the last known value.
+a reload that can't reach Supabase, where it is shown dimmed as the last known value.
 
 ### Failure handling
 `llm.py` sorts every error into one of three buckets, by HTTP status first and message
@@ -122,7 +147,7 @@ the dashboard's model label red with a ⚠ until the next clean run.
 - Every failover prints `<model> is overloaded (503) — trying the next: <model>`.
 - When **every** candidate is busy, the run aborts with a distinct message saying the
   condition is temporary and nothing was written (exit code 75). `dispatch.py` never
-  runs, so the Gist keeps the previous briefing. No model-discovery call is made on that
+  runs, so the stored briefing is untouched. No model-discovery call is made on that
   path — it would be a wasted round trip against an API that is already failing.
 - `LLM_BUSY_COOLDOWN` (default `120`s) keeps a model that just 503'd out of the rotation
   for the rest of the run, so 20 batches don't each re-discover the same outage. It is
@@ -137,8 +162,8 @@ the dashboard's model label red with a ⚠ until the next clean run.
   sets both at once.
 
 ### Never publish over a good briefing
-The Gist holds the only copy of a day's briefing, so an empty result must never
-overwrite it. The pipeline aborts (exit 75, `dispatch` never runs) when:
+`briefings` holds the only copy of a day's briefing and `dispatch.py` upserts by date,
+so an empty result must never be allowed to overwrite it. The pipeline aborts (exit 75, `dispatch` never runs) when:
 
 - ingest kept no articles — usually everything was already published earlier today;
 - articles were scored but **none** came back usable — a broken response contract,
@@ -179,6 +204,7 @@ Simulate the whole chain without touching the API — no key or network needed:
 ```
 cd pipeline && python test_llm_fallback.py        # provider chain + failover
 cd pipeline && python test_gatekeeper_parsing.py  # verdict shapes + the guard
+cd pipeline && python test_supabase_store.py      # storage, paging, prune, RLS-less stub
 ```
 
 > Note: Gemini 3.x deprecates the `temperature` / `top_p` / `top_k` sampling params
@@ -186,22 +212,32 @@ cd pipeline && python test_gatekeeper_parsing.py  # verdict shapes + the guard
 > output plus the schema in each prompt keep responses well-formed.
 
 ## One-time setup
-1. **Create the Gist.** New secret Gist with a file `briefing.json` containing `{}`.
-   Copy its ID (the hash in the URL).
-2. **Create a PAT** scoped to `gist` (classic) or fine-grained with Gist read/write.
+1. **Create the Supabase project** (or reuse one), then run `supabase/schema.sql`
+   in the SQL Editor. It creates the three tables and their RLS policies.
+2. **Copy both keys** from Project Settings → API: the `anon` key for the dashboard
+   and the `service_role` key for the pipeline.
 3. **Get an OpenAI API key** (platform.openai.com) — the primary provider — and a
    **Gemini API key** from Google AI Studio for the fallback (free tier is sufficient).
 4. **Repo secrets** (Settings → Secrets → Actions): `OPENAI_API_KEY`, `GEMINI_API_KEY`,
-   `GH_GIST_TOKEN`, `GIST_ID`. A missing `OPENAI_API_KEY` does not break the run — it
-   falls through to Gemini and flags the dashboard — but it does mean you are not
-   testing what you think you are testing.
-5. **Dashboard config:** in `docs/script.js` set `CONFIG.GIST_ID` to your Gist ID.
-6. **Enable Pages:** Settings → Pages → deploy from branch → `main` / `/docs`.
+   `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`. A missing `OPENAI_API_KEY` does not break
+   the run — it falls through to Gemini and flags the dashboard — but it does mean you
+   are not testing what you think you are testing.
+5. **Dashboard config:** in `docs/script.js` set `CONFIG.SUPABASE_URL` and
+   `CONFIG.SUPABASE_ANON_KEY`. The **anon** key, never `service_role`.
+6. **Publish the dashboard.** The live site is served from the **separate
+   `kalistampai/news` repo**, which holds byte-identical copies of `docs/`
+   (`index.html`, `script.js`, `style.css`, `.nojekyll`) — not from this repo's
+   `/docs`. A front-end change is not live until it is pushed to **both**.
+7. **Migrating from the old Gist?** Run `python migrate_from_gist.py --dry-run`
+   with both the old (`GIST_ID`, `GH_GIST_TOKEN`) and new credentials set, then
+   again without the flag. Skipping it starts the archive at zero, which leaves
+   the day-flip, leaderboard and diff panels empty for 30 days.
 
 ## Run it
 - Manual: Actions tab → **daily-briefing** → *Run workflow*.
 - Local: `cd pipeline && pip install -r requirements.txt`, export the env vars
-  (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `GH_GIST_TOKEN`, `GIST_ID`), then `python run.py`. Intermediate
+  (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`), then
+  `python run.py`. Intermediate
   artifacts (`raw_articles.json`, `scored_articles.json`, `briefing.json`) are written
   in place for inspection.
 
@@ -219,7 +255,7 @@ the comments in `daily.yml`.
 - **Resilience:** the editor synthesizes in batches and, if a batch can't be produced
   even after retries + fallback, emits minimal "degraded" cards so the briefing still
   ships. Set `EDITOR_STRICT=1` to instead abort the whole run on any unrecoverable
-  editor failure (leaving the previous day's briefing in the Gist). Degrading applies
+  editor failure (leaving the previous day's briefing stored). Degrading applies
   to *output* failures only: an all-models-busy outage or a fatal error aborts either
   way, since degrading those would publish a gutted briefing over a good one.
 - **Feeds:** edit `feeds.txt`. Sources with no discoverable RSS are logged and skipped.

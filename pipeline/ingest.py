@@ -732,10 +732,9 @@ def main() -> None:
     # LOOKBACK_HOURS (48) is twice the run interval (24h), so every article
     # falls inside two consecutive windows. The per-source/per-title dedupe
     # above only sees ONE run, so without this every story would be scored and
-    # published twice. Best-effort: if the Gist is unreachable, `previously` is
+    # published twice. Best-effort: if Supabase is unreachable, `previously` is
     # empty and the run proceeds with duplicates rather than failing.
-    seen_state = seen_store.fetch_seen()
-    previously = seen_store.seen_ids(seen_state)
+    previously = seen_store.fetch_seen()
     if previously:
         before = len(deduped)
         deduped = [it for it in deduped if it["id"] not in previously]
@@ -748,9 +747,10 @@ def main() -> None:
     OUT_FILE.write_text(json.dumps(deduped, indent=2, ensure_ascii=False),
                         encoding="utf-8")
 
-    # Stage the merged next state for dispatch.py. Only ids that survived to
-    # raw_articles.json are recorded — those are the ones that cost LLM budget.
-    seen_store.write_pending(seen_state, [it["id"] for it in deduped],
+    # Stage this run's ids for dispatch.py, which writes them only after the
+    # briefing is stored. Only ids that survived to raw_articles.json are
+    # recorded — those are the ones that cost LLM budget.
+    seen_store.write_pending([it["id"] for it in deduped],
                              dt.date.today().isoformat())
 
     write_report(records, len(deduped), suppressed)

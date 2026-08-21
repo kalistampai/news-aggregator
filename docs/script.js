@@ -1,19 +1,34 @@
 /* DISPATCH — reads the briefing, its dated archives, and the feed health reports
-   from a GitHub Gist and renders the board. Read-only: no token in the browser.
-   One API call pulls every day at once, so filtering, collapsing, ranking,
+   from Supabase Postgres and renders the board. Read-only: the key below is the
+   ANON key, which Row Level Security limits to SELECT on two tables.
+   Two API calls pull every day at once, so filtering, collapsing, ranking,
    diffing and day-flipping all happen locally with no further requests. */
 
-/* ============================ CONFIG — EDIT GIST_ID ======================== */
-
+/* ====================== CONFIG — EDIT THE TWO SUPABASE VALUES ============== */
 const CONFIG = {
-  SUPABASE_URL: "https://baiojghilzxhkebfblzv.supabase.co",
-  SUPABASE_ANON_KEY: "sb_publishable_nfLVr5Krdld9pxxr4f2CYQ_bsn0TNxx",
-};
+  // Your project's REST endpoint, from Supabase -> Project Settings -> API.
+  SUPABASE_URL: "https://YOUR-PROJECT-ID.supabase.co",
 
-  // Fallback: a raw Gist URL WITHOUT the commit hash (…/raw/briefing.json) always
-  // serves the newest content. Leave "" to skip. NOTE: the raw fallback can only
-  // return the latest day — archive, health, leaderboard and diff need the API.
-  RAW_URL: "",
+  // The ANON (publishable) key — NOT the service_role key.
+  //
+  // Publishing this in a public repo is correct and intended: the anon key
+  // identifies the project and carries the `anon` Postgres role, and Row Level
+  // Security is what decides what that role may do. supabase/schema.sql grants
+  // it SELECT on `briefings` and `feed_reports` and nothing else — no insert,
+  // no update, no sight of `seen_articles`.
+  //
+  // That guarantee is entirely load-bearing. With RLS disabled on those tables
+  // this key becomes public WRITE access, because Supabase's default grants on
+  // the `public` schema hand anon full DML. If you ever add a table the board
+  // reads, enable RLS on it in the same breath.
+  //
+  // The service_role key bypasses RLS. It belongs in GitHub Actions secrets for
+  // the pipeline, and must never appear in this file.
+  SUPABASE_ANON_KEY: "PUT_YOUR_ANON_KEY_HERE",
+
+  // Days of archive to pull on load. The pipeline prunes at ARCHIVE_KEEP_DAYS
+  // (30), so this only needs to match it.
+  ARCHIVE_DAYS: 30,
 
   // IANA zone for all displayed timestamps. America/Los_Angeles switches between
   // PST and PDT automatically, so the label is always correct.
@@ -25,7 +40,7 @@ const CONFIG = {
    <body data-build>. A mismatch means one of the two files is stale — usually a
    cached script.js on GitHub Pages — which is exactly how a removed control ends
    up referenced by old code and throws "Cannot set properties of null". */
-const BUILD = "2026-08-02a";
+const BUILD = "2026-08-20a";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -63,8 +78,6 @@ if (!board) {
   console.error('[DISPATCH] #board is missing from index.html — nothing can render. ' +
                 'index.html and script.js are out of sync.');
 }
-const BRIEF_RE = /^briefing-(\d{4}-\d{2}-\d{2})\.json$/;
-const REPORT_RE = /^feedreport-(\d{4}-\d{2}-\d{2})\.json$/;
 
 let STORE = { dates: [], byDate: {}, reports: {} };   // dates sorted newest-first
 let currentIndex = 0;
@@ -110,7 +123,7 @@ function savePrefs(patch) {
    session-only (in-memory), so a model that was merely busy yesterday is still
    tried FIRST on the next run. Persisting the display value here is what keeps
    the label truthful across a reload — including a reload that cannot reach
-   the Gist at all. */
+   Supabase at all. */
 const MODEL_KEY = "dispatch.model.v1";
 let MODEL_LABEL = null;     // what the label currently shows
 let MODEL_STORED = null;    // last value read from / written to localStorage
@@ -244,71 +257,63 @@ function utcTitle(iso) {
 }
 
 /* ------------------------------ data loading ----------------------------- */
-async function fetchGist() {
-  if (CONFIG.GIST_ID && CONFIG.GIST_ID !== "PUT_YOUR_GIST_ID_HERE") {
-    try {
-      const r = await fetch(`https://api.github.com/gists/${CONFIG.GIST_ID}`, {
-        headers: { Accept: "application/vnd.github+json" },
-        cache: "no-store",
-      });
-      if (r.ok) return r.json();
-      if (r.status === 403) throw new Error(
-        "GitHub API rate limit reached (60 requests/hr per IP). Try again shortly.");
-    } catch (e) {
-      if (e && /rate limit/i.test(e.message)) throw e;   // surface, don't mask
-      /* otherwise fall through to RAW_URL */
-    }
+/* Two REST reads pull every archived day at once — briefings and feed reports —
+   so filtering, collapsing, ranking, diffing and day-flipping all happen locally
+   with no further requests. PostgREST sends CORS headers, so this works from
+   GitHub Pages with no proxy and no rate limit per visitor IP. */
+async function fetchTable(table) {
+  const url = `${CONFIG.SUPABASE_URL}/rest/v1/${table}` +
+              `?select=date,payload&order=date.desc&limit=${CONFIG.ARCHIVE_DAYS}`;
+  const r = await fetch(url, {
+    headers: {
+      apikey: CONFIG.SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`,
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  });
+  if (r.ok) return r.json();
+
+  /* PostgREST answers failures with {message, hint, code}. Surfacing it turns
+     the two setup mistakes that actually happen — a wrong key, and RLS enabled
+     with no SELECT policy — from a blank board into a sentence naming the
+     cause. Note that a missing SELECT policy is NOT an error: RLS filters the
+     rows away and returns 200 with []. That case is handled in boot(). */
+  let detail = "";
+  try { detail = (await r.json()).message || ""; } catch (_) { /* not JSON */ }
+  const because = detail ? ` — ${detail}` : "";
+  if (r.status === 401 || r.status === 403) {
+    throw new Error(`Supabase refused the read (${r.status}). Check ` +
+      `SUPABASE_ANON_KEY in script.js.${because}`);
   }
-  if (CONFIG.RAW_URL) {
-    const r = await fetch(CONFIG.RAW_URL, { cache: "no-store" });
-    if (r.ok) return { __rawOnly: await r.json() };
+  if (r.status === 404) {
+    throw new Error(`Supabase has no "${table}" table (404). Run ` +
+      `supabase/schema.sql in the SQL editor.${because}`);
   }
-  throw new Error("Could not reach the Gist. Check GIST_ID / RAW_URL in script.js.");
+  throw new Error(`Could not read "${table}" from Supabase (${r.status})${because}.`);
 }
 
-/* The Gist API inlines file content only up to ~1 MB; past that it sets
-   truncated:true and content is clipped. Silently skipping those would make a
-   day vanish from the archive, so follow raw_url instead. */
-async function parseFile(file) {
-  if (!file) return null;
-  try {
-    if (file.truncated && file.raw_url) {
-      const r = await fetch(file.raw_url, { cache: "no-store" });
-      if (!r.ok) return null;
-      return JSON.parse(await r.text());
-    }
-    return JSON.parse(file.content);
-  } catch (_) { return null; }
-}
+async function buildStore() {
+  if (!CONFIG.SUPABASE_URL || CONFIG.SUPABASE_URL.includes("YOUR-PROJECT-ID") ||
+      CONFIG.SUPABASE_ANON_KEY.startsWith("PUT_YOUR_")) {
+    throw new Error("Supabase is not configured — set SUPABASE_URL and " +
+                    "SUPABASE_ANON_KEY at the top of script.js.");
+  }
 
-async function buildStore(gist) {
+  /* Feed health is secondary furniture: the health panel, leaderboard and diff
+     all degrade to hidden without it. It must never be able to blank a briefing
+     that loaded fine — the same reasoning as the UI-wiring try/catch in boot(). */
+  const [briefRows, reportRows] = await Promise.all([
+    fetchTable("briefings"),
+    fetchTable("feed_reports").catch((e) => {
+      console.warn("[DISPATCH] feed health unavailable:", e.message);
+      return [];
+    }),
+  ]);
+
   const byDate = {}, reports = {};
-
-  if (gist.__rawOnly) {                          // fallback path: latest day only
-    const d = gist.__rawOnly;
-    const key = d.date || "latest";
-    byDate[key] = d;
-    return { dates: [key], byDate, reports };
-  }
-
-  const files = gist.files || {};
-  for (const [name, file] of Object.entries(files)) {
-    const mb = name.match(BRIEF_RE);
-    if (mb) { const d = await parseFile(file); if (d) byDate[mb[1]] = d; continue; }
-    const mr = name.match(REPORT_RE);
-    if (mr) { const d = await parseFile(file); if (d) reports[mr[1]] = d; }
-  }
-
-  const latest = await parseFile(files[CONFIG.LATEST_FILE]);
-  if (latest) {
-    const key = latest.date || "latest";
-    if (!byDate[key]) byDate[key] = latest;
-  }
-  const latestReport = await parseFile(files[CONFIG.LATEST_REPORT]);
-  if (latestReport) {
-    const key = latestReport.date || "latest";
-    if (!reports[key]) reports[key] = latestReport;
-  }
+  for (const row of briefRows) if (row && row.payload) byDate[row.date] = row.payload;
+  for (const row of reportRows) if (row && row.payload) reports[row.date] = row.payload;
 
   const dates = Object.keys(byDate).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
   return { dates, byDate, reports };
@@ -1223,9 +1228,13 @@ function checkAssetVersions() {
   ACTIVE_TAB = typeof prefs.activeTab === "string" ? prefs.activeTab : "all";
 
   try {
-    const gist = await fetchGist();
-    STORE = await buildStore(gist);
-    if (!STORE.dates.length) throw new Error("No briefing found in the Gist yet.");
+    STORE = await buildStore();
+    // A successful read that returns nothing is the signature of RLS with no
+    // SELECT policy, so say that rather than "no briefing yet".
+    if (!STORE.dates.length) throw new Error(
+      "Supabase returned no briefings. Either the pipeline has not run yet, or " +
+      "the SELECT policy on `briefings` is missing — an anon read blocked by " +
+      "RLS returns an empty list, not an error.");
 
     // ---- UI wiring -------------------------------------------------------
     // Isolated from data loading on purpose. A control that has been removed
