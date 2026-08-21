@@ -1,53 +1,39 @@
 """
-Stage 4 — Automated Gist Dispatch (The Delivery)
+Stage 4 — Publish (The Delivery)
 
-PATCHes the briefing, the feed health report AND the cross-run seen-set into
-the target Gist:
-  - briefing.json                -> latest day (dashboard opens this by default)
-  - briefing-YYYY-MM-DD.json     -> dated archive copy, so past days stay browsable
-  - feedreport.json              -> latest feed health snapshot
-  - feedreport-YYYY-MM-DD.json   -> dated archive, so the dashboard can diff days
-                                    and show which sources went dark / recovered
-  - seen_urls.json               -> article ids already published, so a 48h
-                                    lookback on a 24h schedule cannot republish
+Writes the day's output to Supabase Postgres:
+  - briefings.<date>      -> the briefing the dashboard renders
+  - feed_reports.<date>   -> the slim feed-health snapshot, so the dashboard can
+                             diff days and show which sources went dark
+  - seen_articles         -> ids already published, so a 48h lookback on a 24h
+                             schedule cannot republish (see seen.py)
 
-The report published here is a SLIM copy: ingest.py's feed_report.json embeds every
-article it collected, which would bloat the Gist. We strip `items` and keep only
-what the dashboard renders (url, source, status, detail, counts).
+The report stored here is a SLIM copy: ingest.py's feed_report.json embeds every
+article it collected, which would bloat the row for nothing — the dashboard
+renders only (url, source, status, detail, counts).
 
-Archive files older than ARCHIVE_KEEP_DAYS are pruned in the same request, for both
-briefings and reports, keeping the Gist bounded. Auth is a PAT scoped to `gist`,
-read from GH_GIST_TOKEN. No server.
+Rows older than ARCHIVE_KEEP_DAYS are pruned after the write, keeping the
+archive bounded exactly as the Gist prune did.
+
+Auth is the Supabase SERVICE ROLE key from SUPABASE_SERVICE_KEY, which bypasses
+RLS. No server.
 """
 from __future__ import annotations
 import datetime as dt
 import json
 import os
-import re
 from pathlib import Path
 
 import requests
 
 import seen as seen_store
+import store
 
 HERE = Path(__file__).parent
 BRIEFING = HERE / "briefing.json"
 FEED_REPORT = HERE / "feed_report.json"
 
-GIST_ID = os.environ["GIST_ID"]
-TOKEN = os.environ["GH_GIST_TOKEN"]
-LATEST_FILENAME = os.environ.get("GIST_FILENAME", "briefing.json")
-REPORT_FILENAME = os.environ.get("GIST_REPORT_FILENAME", "feedreport.json")
 KEEP_DAYS = int(os.environ.get("ARCHIVE_KEEP_DAYS", "30"))
-
-API = f"https://api.github.com/gists/{GIST_ID}"
-HEADERS = {
-    "Authorization": f"Bearer {TOKEN}",
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-}
-BRIEF_RE = re.compile(r"^briefing-(\d{4}-\d{2}-\d{2})\.json$")
-REPORT_RE = re.compile(r"^feedreport-(\d{4}-\d{2}-\d{2})\.json$")
 
 
 def _archive_date(payload: dict) -> str:
@@ -55,8 +41,8 @@ def _archive_date(payload: dict) -> str:
     return payload.get("date") or dt.date.today().isoformat()
 
 
-def _slim_report(date: str) -> str | None:
-    """Strip article payloads from the feed report so the Gist stays small."""
+def _slim_report(date: str) -> dict | None:
+    """Strip article payloads from the feed report so the stored row stays small."""
     if not FEED_REPORT.exists():
         return None
     try:
@@ -76,66 +62,56 @@ def _slim_report(date: str) -> str | None:
         })
     sources.sort(key=lambda s: (s["status"] == "OK", s["source"] or ""))
 
-    return json.dumps({
+    return {
         "date": date,
         "generated_at": full.get("generated_at"),
         "lookback_hours": full.get("lookback_hours"),
         "totals": full.get("totals", {}),
         "sources": sources,
-    }, indent=2, ensure_ascii=False)
+    }
+
+
+def _prune(date: str) -> None:
+    """
+    Drop archive rows outside the retention window. A calendar window, not a
+    row count — with daily runs the two are identical, and after a gap the
+    window is the honest reading of "keep 30 days". Best-effort: pruning must
+    never fail a run whose briefing is already stored.
+    """
+    cutoff = (dt.date.fromisoformat(date) -
+              dt.timedelta(days=KEEP_DAYS - 1)).isoformat()
+    try:
+        for table in ("briefings", "feed_reports"):
+            store.delete(table, {"date": f"lt.{cutoff}"})
+        print(f"[dispatch] pruned archive before {cutoff} "
+              f"(keeping {KEEP_DAYS} days)", flush=True)
+    except (store.StoreError, requests.RequestException) as exc:
+        print(f"[dispatch] prune skipped ({type(exc).__name__}: {exc})", flush=True)
 
 
 def main() -> None:
-    content = BRIEFING.read_text(encoding="utf-8")
-    payload = json.loads(content)
+    payload = json.loads(BRIEFING.read_text(encoding="utf-8"))
     date = _archive_date(payload)
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
 
-    files: dict[str, object] = {
-        LATEST_FILENAME: {"content": content},
-        f"briefing-{date}.json": {"content": content},
-    }
-
-    # Cross-run dedupe state. ingest.py already merged + pruned it; this just
-    # rides along in the PATCH below, costing ZERO extra API calls.
-    seen_payload = seen_store.build_gist_payload()
-    if seen_payload:
-        files[seen_payload[0]] = {"content": seen_payload[1]}
+    # The briefing itself is the one write that is allowed to fail the run: if
+    # it does not land, there is nothing to publish and run.py should say so.
+    store.upsert("briefings",
+                 [{"date": date, "payload": payload, "updated_at": now}])
+    print(f"[dispatch] briefings <- {date}", flush=True)
 
     report = _slim_report(date)
     if report:
-        files[REPORT_FILENAME] = {"content": report}
-        files[f"feedreport-{date}.json"] = {"content": report}
+        store.upsert("feed_reports",
+                     [{"date": date, "payload": report, "updated_at": now}])
+        print(f"[dispatch] feed_reports <- {date} "
+              f"({len(report['sources'])} sources)", flush=True)
     else:
         print("[dispatch] no feed_report.json found — publishing briefing only",
               flush=True)
 
-    # Prune archives beyond KEEP_DAYS. Best-effort: never block dispatch on it.
-    pruned = 0
-    try:
-        cur = requests.get(API, headers=HEADERS, timeout=30)
-        cur.raise_for_status()
-        existing = cur.json().get("files", {})
-        for rx, prefix in ((BRIEF_RE, "briefing"), (REPORT_RE, "feedreport")):
-            dates = sorted(
-                (m.group(1) for name in existing if (m := rx.match(name))),
-                reverse=True,
-            )
-            for old in dates[KEEP_DAYS - 1:]:      # keep newest KEEP_DAYS-1 + today
-                if old != date:
-                    files[f"{prefix}-{old}.json"] = None   # null deletes the file
-                    pruned += 1
-    except requests.RequestException:
-        pass
-
-    resp = requests.patch(API, headers=HEADERS,
-                          data=json.dumps({"files": files}), timeout=30)
-    resp.raise_for_status()
-    raw = resp.json()["files"][LATEST_FILENAME]["raw_url"]
-
-    print(f"[dispatch] Gist updated -> {raw}", flush=True)
-    print(f"[dispatch] archived briefing-{date}.json"
-          + (f" + feedreport-{date}.json" if report else "")
-          + (f", pruned {pruned} old" if pruned else ""), flush=True)
+    seen_store.flush()
+    _prune(date)
 
 
 if __name__ == "__main__":

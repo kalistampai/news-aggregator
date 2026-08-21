@@ -3,3 +3,6 @@ pipeline/scored_articles.json
 pipeline/briefing.json
 __pycache__/
 *.pyc
+pipeline/seen_pending.json
+pipeline/feed_report.json
+pipeline/feed_report.md

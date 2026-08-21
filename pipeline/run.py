@@ -21,12 +21,12 @@ if __name__ == "__main__":
         dispatch.main()
     except EmptyScoringError as exc:
         print(f"\n[run] NOTHING TO PUBLISH — {exc}", flush=True)
-        print("[run] The Gist still holds the previous briefing, unchanged.",
+        print("[run] Supabase still holds the previous briefing, unchanged.",
               flush=True)
         sys.exit(75)          # EX_TEMPFAIL — same class as an outage
     except ModelsBusyError as exc:
         print(f"\n[run] TEMPORARY OUTAGE — {exc}", flush=True)
-        print("[run] Nothing was published: the Gist still holds the previous "
+        print("[run] Nothing was published: Supabase still holds the previous "
               "briefing, unchanged. No key, model id or setting needs fixing — "
               "re-run the workflow when the models free up.", flush=True)
         sys.exit(75)          # EX_TEMPFAIL — distinct from a real failure

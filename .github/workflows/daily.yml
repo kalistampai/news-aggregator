@@ -21,10 +21,10 @@ on:
     - cron: "17 13 * * *"
 
   # Enables the manual "Run workflow" button (Actions -> daily-briefing -> right
-  # side). The checkbox is a RECOVERY switch: cross-run dedupe marks an article
-  # published as soon as it survives ingest, so if a run ships a broken or empty
-  # briefing, those articles are suppressed on the retry and the day cannot be
-  # rebuilt. Ticking this re-ingests everything inside the lookback window.
+  # side). The checkbox is a RECOVERY switch: cross-run dedupe records every
+  # article that survives ingest, so if a run ships a broken or empty briefing,
+  # those articles are suppressed on the retry and the day cannot be rebuilt.
+  # Ticking this re-ingests everything inside the lookback window.
   # Scheduled runs always keep dedupe ON.
   workflow_dispatch:
     inputs:
@@ -36,8 +36,8 @@ on:
 permissions:
   contents: write             # only for the keepalive commit (final step)
 
-# A delayed run must never overlap the next day's run (both would PATCH the same
-# Gist). Queue instead of running concurrently; never cancel a briefing midway.
+# A delayed run must never overlap the next day's run (both would write the same
+# rows). Queue instead of running concurrently; never cancel a briefing midway.
 concurrency:
   group: daily-briefing
   cancel-in-progress: false
@@ -70,8 +70,14 @@ jobs:
           PYTHONUNBUFFERED: "1"
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GH_GIST_TOKEN:  ${{ secrets.GH_GIST_TOKEN }}
-          GIST_ID:        ${{ secrets.GIST_ID }}
+          # ---- persistence -------------------------------------------------
+          # Supabase Postgres holds the briefing, the feed report and the
+          # cross-run seen-set. SUPABASE_SERVICE_KEY is the SERVICE ROLE key: it
+          # bypasses Row Level Security, so it is a full-database credential and
+          # lives only here. The dashboard uses the anon key, which RLS limits
+          # to SELECT — never put the service key in docs/.
+          SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
           # ---- models -----------------------------------------------------
           # OpenAI GPT-5.6 trial. Every id is provider-prefixed, so one ordered
@@ -133,9 +139,10 @@ jobs:
           # ---- cross-run dedupe ------------------------------------------
           # LOOKBACK_HOURS (48) is 2x the run interval (24h), so every article
           # sits in two consecutive windows and would publish twice. seen.py
-          # keeps the ids already published in the Gist and ingest.py drops
-          # them. Costs +1 authenticated GET/run (~0.06% of the 5000/hr limit)
-          # and ~33 KB in the Gist. Set to "0" to disable and allow repeats.
+          # keeps the ids already published in the seen_articles table and
+          # ingest.py drops them. One indexed SELECT per run; rows outside the
+          # retention window are deleted on the way out. Set to "0" to disable
+          # and allow repeats.
           # "1" on every scheduled run; "0" only when the recovery checkbox on a
           # manual run is ticked. inputs.* is empty for schedule, so this is "1".
           CROSS_RUN_DEDUPE: ${{ inputs.ignore_seen && '0' || '1' }}
@@ -173,8 +180,9 @@ jobs:
 
       # -------------------------------------------------------------------------
       # KEEPALIVE — GitHub auto-disables a scheduled workflow after 60 days with
-      # no commit on the default branch. This pipeline writes only to a Gist, so
-      # the repo never receives commits from normal operation and the cron would
+      # no commit on the default branch. This pipeline writes only to Supabase,
+      # so the repo never receives commits from normal operation and the cron
+      # would
       # stop ~day 60. Commits a heartbeat once the branch has been quiet 50+ days.
       # Runs even if the pipeline failed, so a bad run can't let the schedule lapse.
       - name: Keepalive (avoid 60-day cron auto-disable)
