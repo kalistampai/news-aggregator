@@ -2,7 +2,7 @@
 Supabase (PostgREST) client — the pipeline's persistence layer.
 
 Replaces the GitHub Gist that used to hold the briefing, the feed report and the
-cross-run seen-set. Three tables, defined in supabase/schema.sql:
+cross-run seen-set. Three tables, defined in supabase/migrations/:
 
     briefings      (date PK, payload jsonb, updated_at)
     feed_reports   (date PK, payload jsonb, updated_at)
@@ -14,6 +14,11 @@ SERVICE ROLE key, which bypasses RLS. That key is a full-database credential: it
 belongs in Actions secrets and must never appear in docs/ or reach a browser.
 The dashboard reads the same tables with the ANON key, which RLS restricts to
 SELECT on briefings and feed_reports.
+
+SCHEMA ROUTING
+SUPABASE_SCHEMA is mandatory. PostgREST uses Accept-Profile for reads and
+Content-Profile for writes, which keeps this application's ordinary table names
+inside its news_aggregator schema in a database shared by several applications.
 
 WHY RAW REST RATHER THAN supabase-py
 Every call here is one table hit — no auth session, no realtime, no storage.
@@ -39,25 +44,29 @@ class StoreError(RuntimeError):
 
 def configured() -> bool:
     return bool(os.environ.get("SUPABASE_URL") and
-                os.environ.get("SUPABASE_SERVICE_KEY"))
+                os.environ.get("SUPABASE_SERVICE_KEY") and
+                os.environ.get("SUPABASE_SCHEMA"))
 
 
-def _conf() -> tuple[str, str]:
+def _conf() -> tuple[str, str, str]:
     url = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
     key = os.environ.get("SUPABASE_SERVICE_KEY") or ""
-    if not url or not key:
+    schema = (os.environ.get("SUPABASE_SCHEMA") or "").strip()
+    if not url or not key or not schema:
         raise StoreError(
-            "SUPABASE_URL / SUPABASE_SERVICE_KEY are not set — nothing can be "
+            "SUPABASE_URL / SUPABASE_SERVICE_KEY / SUPABASE_SCHEMA are not set "
+            "— nothing can be "
             "published. See README 'One-time setup'.")
-    return url, key
+    return url, key, schema
 
 
-def _headers(extra: dict | None = None) -> dict:
-    _, key = _conf()
+def _headers(profile_header: str, extra: dict | None = None) -> dict:
+    _, key, schema = _conf()
     h = {
         "apikey": key,
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
+        profile_header: schema,
     }
     if extra:
         h.update(extra)
@@ -65,7 +74,7 @@ def _headers(extra: dict | None = None) -> dict:
 
 
 def _endpoint(table: str) -> str:
-    url, _ = _conf()
+    url, _, _ = _conf()
     return f"{url}/rest/v1/{table}"
 
 
@@ -107,7 +116,7 @@ def select(table: str, params: dict) -> list[dict]:
                          f"offset paging over an unordered result is not stable")
     out: list[dict] = []
     for _ in range(_MAX_PAGES):
-        r = requests.get(_endpoint(table), headers=_headers(),
+        r = requests.get(_endpoint(table), headers=_headers("Accept-Profile"),
                          params={**params, "limit": _PAGE, "offset": len(out)},
                          timeout=_TIMEOUT)
         _check(r, f"select from {table}")
@@ -123,7 +132,9 @@ def upsert(table: str, rows: list[dict]) -> int:
     """INSERT ... ON CONFLICT DO UPDATE, keyed by the table's primary key."""
     if not rows:
         return 0
-    headers = _headers({"Prefer": "resolution=merge-duplicates,return=minimal"})
+    headers = _headers(
+        "Content-Profile",
+        {"Prefer": "resolution=merge-duplicates,return=minimal"})
     for i in range(0, len(rows), _CHUNK):
         chunk = rows[i:i + _CHUNK]
         r = requests.post(
@@ -142,6 +153,8 @@ def delete(table: str, params: dict) -> None:
     """
     if not params:
         raise StoreError(f"refusing to DELETE from {table} with no filter")
-    r = requests.delete(_endpoint(table), headers=_headers({"Prefer": "return=minimal"}),
+    r = requests.delete(
+        _endpoint(table),
+        headers=_headers("Content-Profile", {"Prefer": "return=minimal"}),
                         params=params, timeout=_TIMEOUT)
     _check(r, f"delete from {table}")

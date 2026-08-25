@@ -70,8 +70,8 @@ def fetch_seen() -> set[str]:
     print("[seen] cross-run dedupe ENABLED (CROSS_RUN_DEDUPE=1)", flush=True)
 
     if not store.configured():
-        print("[seen] SUPABASE_URL / SUPABASE_SERVICE_KEY not set — dedupe "
-              "skipped", flush=True)
+        print("[seen] Supabase persistence variables are not fully configured "
+              "— dedupe skipped", flush=True)
         return set()
 
     try:

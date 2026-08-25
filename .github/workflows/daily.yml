@@ -78,6 +78,9 @@ jobs:
           # to SELECT — never put the service key in docs/.
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Non-secret routing boundary for this application inside the shared
+          # Supabase Postgres database.
+          SUPABASE_SCHEMA: news_aggregator
 
           # ---- models -----------------------------------------------------
           # OpenAI GPT-5.6 trial. Every id is provider-prefixed, so one ordered

@@ -4,7 +4,7 @@
    Two API calls pull every day at once, so filtering, collapsing, ranking,
    diffing and day-flipping all happen locally with no further requests. */
 
-/* ====================== CONFIG — EDIT THE TWO SUPABASE VALUES ============== */
+/* ======================== SUPABASE CONFIGURATION =========================== */
 const CONFIG = {
   // Your project's REST endpoint, from Supabase -> Project Settings -> API.
   SUPABASE_URL: "https://baiojghilzxhkebfblzv.supabase.co",
@@ -13,7 +13,7 @@ const CONFIG = {
   //
   // Publishing this in a public repo is correct and intended: the anon key
   // identifies the project and carries the `anon` Postgres role, and Row Level
-  // Security is what decides what that role may do. supabase/schema.sql grants
+  // Security is what decides what that role may do. The schema migration grants
   // it SELECT on `briefings` and `feed_reports` and nothing else — no insert,
   // no update, no sight of `seen_articles`.
   //
@@ -25,6 +25,10 @@ const CONFIG = {
   // The service_role key bypasses RLS. It belongs in GitHub Actions secrets for
   // the pipeline, and must never appear in this file.
   SUPABASE_ANON_KEY: "sb_publishable_nfLVr5Krdld9pxxr4f2CYQ_bsn0TNxx",
+
+  // Each application in the shared Supabase project owns one Postgres schema.
+  // PostgREST selects this schema through the Accept-Profile request header.
+  SUPABASE_SCHEMA: "news_aggregator",
 
   // Days of archive to pull on load. The pipeline prunes at ARCHIVE_KEEP_DAYS
   // (30), so this only needs to match it.
@@ -352,6 +356,7 @@ async function fetchTable(table) {
     headers: {
       apikey: CONFIG.SUPABASE_ANON_KEY,
       Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`,
+      "Accept-Profile": CONFIG.SUPABASE_SCHEMA,
       Accept: "application/json",
     },
     cache: "no-store",
@@ -372,16 +377,19 @@ async function fetchTable(table) {
   }
   if (r.status === 404) {
     throw new Error(`Supabase has no "${table}" table (404). Run ` +
-      `supabase/schema.sql in the SQL editor.${because}`);
+      `the schema migration and expose "${CONFIG.SUPABASE_SCHEMA}" in the ` +
+      `Data API settings.${because}`);
   }
   throw new Error(`Could not read "${table}" from Supabase (${r.status})${because}.`);
 }
 
 async function buildStore() {
   if (!CONFIG.SUPABASE_URL || CONFIG.SUPABASE_URL.includes("YOUR-PROJECT-ID") ||
-      CONFIG.SUPABASE_ANON_KEY.startsWith("PUT_YOUR_")) {
+      CONFIG.SUPABASE_ANON_KEY.startsWith("PUT_YOUR_") ||
+      !CONFIG.SUPABASE_SCHEMA) {
     throw new Error("Supabase is not configured — set SUPABASE_URL and " +
-                    "SUPABASE_ANON_KEY at the top of script.js.");
+                    "SUPABASE_ANON_KEY and SUPABASE_SCHEMA at the top of " +
+                    "script.js.");
   }
 
   /* Feed health is secondary furniture: the health panel, leaderboard and diff
