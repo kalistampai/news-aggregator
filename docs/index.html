@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b1118" />
   <!-- Auto-refresh was removed by design: no meta refresh directive, no timer in
        script.js. (Tag name deliberately not spelled out so a grep audit of this
        file returns a clean zero.)
@@ -22,9 +23,12 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=2026-08-20b" />
+  <link rel="stylesheet" href="style.css?v=2026-08-28a" />
 </head>
-<body data-build="2026-08-20b">
+<body data-build="2026-08-28a">
+  <div class="read-progress" aria-hidden="true">
+    <span class="read-progress__bar" id="readProgressBar"></span>
+  </div>
   <div class="scanline" aria-hidden="true"></div>
 
   <header class="masthead">
@@ -49,64 +53,72 @@
     </div>
     <p class="masthead__sub">Daily news aggregated and compiled · review <a href="https://github.com/kalistampai/news-aggregator/blob/main/pipeline/feeds.txt" target="_blank" rel="noopener noreferrer">news sources</a> to make updates</p>
 
-    <div class="masthead__archive" id="archiveBar" hidden>
-      <span class="archive__label">// log</span>
-      <button class="archive__nav" id="prevDay" title="Older day" aria-label="Older day">◄</button>
-      <span class="archive__select-wrap">
-        <select class="archive__select" id="archiveSelect" aria-label="Select briefing date"></select>
-      </span>
-      <button class="archive__nav" id="nextDay" title="Newer day" aria-label="Newer day">►</button>
-      <button class="archive__latest" id="latestBtn" title="Jump to latest">latest</button>
-      <span class="archive__count" id="archiveCount"></span>
-    </div>
+    <div class="masthead__tools">
+      <div class="masthead__archive" id="archiveBar" hidden>
+        <span class="archive__label">// archive</span>
+        <button class="archive__nav" id="prevDay" title="Older day" aria-label="Older day">◄</button>
+        <span class="archive__select-wrap">
+          <select class="archive__select" id="archiveSelect" aria-label="Select briefing date"></select>
+        </span>
+        <button class="archive__nav" id="nextDay" title="Newer day" aria-label="Newer day">►</button>
+        <button class="archive__latest" id="latestBtn" title="Jump to latest">latest</button>
+        <span class="archive__count" id="archiveCount"></span>
+      </div>
 
-    <div class="masthead__search" id="searchBar" hidden>
-      <span class="search__label">// filter</span>
-      <input type="search" class="search__input" id="searchInput"
-             placeholder="Keyword search (title, source, reasoning, bullets)…"
-             aria-label="Filter news items by keyword" autocomplete="off" spellcheck="false" />
-      <button class="search__clear" id="searchClear" title="Clear filter (Esc)" hidden>clear</button>
-      <span class="search__count" id="searchCount"></span>
-    </div>
+      <div class="masthead__search" id="searchBar" hidden>
+        <span class="search__label">// filter</span>
+        <span class="search__field">
+          <span class="search__icon" aria-hidden="true">⌕</span>
+          <input type="search" class="search__input" id="searchInput"
+                 placeholder="Search titles, sources, rationale, bullets…"
+                 aria-label="Filter news items by keyword" autocomplete="off" spellcheck="false" />
+          <kbd class="search__key" aria-hidden="true">/</kbd>
+        </span>
+        <button class="search__clear" id="searchClear" title="Clear filter (Esc)" hidden>clear</button>
+        <span class="search__count" id="searchCount" aria-live="polite"></span>
+      </div>
 
-    <div class="masthead__controls" id="controlBar" hidden>
-      <span class="ctl__label">// score</span>
-      <input type="range" class="ctl__range" id="scoreRange" min="0" max="10" step="1" value="0"
-             aria-label="Minimum relevance score" />
-      <span class="ctl__value" id="scoreValue">all</span>
-      <button class="ctl__btn" id="scoreReset" title="Reset score threshold" hidden>reset</button>
+      <div class="masthead__controls" id="controlBar" hidden>
+        <span class="ctl__label">// relevance</span>
+        <span class="ctl__presets" id="scorePresets" role="group" aria-label="Minimum relevance score">
+          <button type="button" class="ctl__chip is-on" data-min-score="0" aria-pressed="true">All</button>
+          <button type="button" class="ctl__chip" data-min-score="7" aria-pressed="false">7+</button>
+          <button type="button" class="ctl__chip" data-min-score="8" aria-pressed="false">8+</button>
+          <button type="button" class="ctl__chip" data-min-score="9" aria-pressed="false">9+</button>
+        </span>
 
-      <span class="ctl__sep" aria-hidden="true">|</span>
+        <span class="ctl__sep" aria-hidden="true"></span>
 
-      <span class="ctl__group" role="group" aria-label="Category sections">
-        <button type="button" class="ctl__bigbtn" id="collapseAll"
-                title="Collapse every category (c)">
-          <span class="ctl__bigbtn-icon" aria-hidden="true">&#9654;</span>
-          <span>collapse all</span>
-        </button>
-        <button type="button" class="ctl__bigbtn" id="expandAll"
-                title="Expand every category (e)">
-          <span class="ctl__bigbtn-icon ctl__bigbtn-icon--open" aria-hidden="true">&#9654;</span>
-          <span>expand all</span>
-        </button>
-      </span>
-      <span class="ctl__state" id="collapseState" aria-live="polite"></span>
+        <span class="ctl__group" role="group" aria-label="Category sections">
+          <button type="button" class="ctl__bigbtn" id="collapseAll"
+                  title="Collapse every category (c)">
+            <span class="ctl__bigbtn-icon" aria-hidden="true">&#9654;</span>
+            <span>collapse</span>
+          </button>
+          <button type="button" class="ctl__bigbtn" id="expandAll"
+                  title="Expand every category (e)">
+            <span class="ctl__bigbtn-icon ctl__bigbtn-icon--open" aria-hidden="true">&#9654;</span>
+            <span>expand</span>
+          </button>
+        </span>
+        <span class="ctl__state" id="collapseState" aria-live="polite"></span>
+      </div>
 
-    </div>
-
-    <div class="masthead__stats" id="statBar" hidden>
-      <span><b id="featCount">0</b> features</span>
-      <span class="dot">·</span>
-      <span><b id="notableCount">0</b> notable</span>
-      <span class="dot">·</span>
-      <span><b id="catCount">0</b> streams</span>
-      <span class="dot">·</span>
-      <span class="stamp" id="genStamp">—</span>
+      <div class="masthead__stats" id="statBar" hidden>
+        <span><b id="featCount">0</b> features</span>
+        <span class="dot">·</span>
+        <span><b id="notableCount">0</b> notable</span>
+        <span class="dot">·</span>
+        <span><b id="catCount">0</b> streams</span>
+        <span class="dot">·</span>
+        <span class="stamp" id="genStamp">—</span>
+      </div>
     </div>
   </header>
 
-  <!-- Feed health: collapsed to one line; expands to the full source report. -->
-  <section class="health" id="healthPanel" hidden>
+  <!-- Compact diagnostics row: each panel expands to the full width. -->
+  <div class="diagnostics" id="diagnostics">
+    <section class="health" id="healthPanel" hidden>
     <button class="health__toggle" id="healthToggle" aria-expanded="false" aria-controls="healthBody">
       <span class="health__dot" id="healthDot" aria-hidden="true"></span>
       <span class="health__headline" id="healthHeadline">Feed health</span>
@@ -118,10 +130,10 @@
       <div class="health__groups" id="healthGroups"></div>
       <p class="health__foot" id="healthFoot"></p>
     </div>
-  </section>
+    </section>
 
   <!-- Source leaderboard: which feeds actually earn their place. -->
-  <section class="health" id="boardPanel" hidden>
+    <section class="health" id="boardPanel" hidden>
     <button class="health__toggle" id="boardToggle" aria-expanded="false" aria-controls="boardBody">
       <span class="health__dot" data-level="good" aria-hidden="true"></span>
       <span class="health__headline" id="boardHeadline">Source leaderboard</span>
@@ -143,10 +155,10 @@
       <div class="lb__table" id="lbTable"></div>
       <p class="health__foot" id="lbFoot"></p>
     </div>
-  </section>
+    </section>
 
   <!-- Diff view: what changed between two briefings. -->
-  <section class="health" id="diffPanel" hidden>
+    <section class="health" id="diffPanel" hidden>
     <button class="health__toggle" id="diffToggle" aria-expanded="false" aria-controls="diffBody">
       <span class="health__dot" id="diffDot" aria-hidden="true"></span>
       <span class="health__headline" id="diffHeadline">Diff view</span>
@@ -164,16 +176,28 @@
       <div class="diff__grid" id="diffGrid"></div>
       <p class="health__foot" id="diffFoot"></p>
     </div>
-  </section>
+    </section>
+  </div>
 
   <!-- Section tabs: built from the day's categories in script.js (CATEGORY_ORDER).
        Hidden when a briefing has fewer than two categories. -->
   <nav class="tabs" id="tabBar" role="tablist" aria-label="Briefing sections" hidden></nav>
 
   <main id="board" class="board" aria-live="polite">
-    <div class="state" id="loadingState">
-      <div class="state__pulse"></div>
-      <p>Fetching briefing…</p>
+    <div class="loading-shell" id="loadingState" role="status">
+      <span class="sr-only">Fetching briefing…</span>
+      <div class="skeleton skeleton--heading"></div>
+      <div class="skeleton-card" aria-hidden="true">
+        <span class="skeleton skeleton--meta"></span>
+        <span class="skeleton skeleton--title"></span>
+        <span class="skeleton skeleton--line"></span>
+        <span class="skeleton skeleton--line skeleton--line-short"></span>
+      </div>
+      <div class="skeleton-card" aria-hidden="true">
+        <span class="skeleton skeleton--meta"></span>
+        <span class="skeleton skeleton--title"></span>
+        <span class="skeleton skeleton--line"></span>
+      </div>
     </div>
   </main>
 
@@ -186,9 +210,22 @@
           <span class="card__score"></span>
         </div>
         <h3 class="card__title"><a target="_blank" rel="noopener noreferrer"></a></h3>
-        <p class="card__why"></p>
-        <ul class="card__bullets"></ul>
-        <a class="card__link" target="_blank" rel="noopener noreferrer">open source ↗</a>
+        <div class="card__why">
+          <span class="card__why-label">Why it matters</span>
+          <p class="card__why-text"></p>
+        </div>
+        <div class="card__actions">
+          <button type="button" class="card__details-toggle" aria-expanded="false">
+            <span class="card__details-label">Details</span>
+            <span class="card__details-chev" aria-hidden="true">▾</span>
+          </button>
+          <a class="card__link" target="_blank" rel="noopener noreferrer">source ↗</a>
+        </div>
+        <div class="card__details" aria-hidden="true">
+          <div class="card__details-inner">
+            <ul class="card__bullets"></ul>
+          </div>
+        </div>
       </div>
     </article>
   </template>
@@ -197,6 +234,6 @@
     <span id="footerNote">DISPATCH · If you don't read the news, you're uninformed. If you read the news, you're mis-informed.</span>
   </footer>
 
-  <script src="script.js?v=2026-08-20b"></script>
+  <script src="script.js?v=2026-08-28a"></script>
 </body>
 </html>

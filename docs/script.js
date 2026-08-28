@@ -4,7 +4,7 @@
    Two API calls pull every day at once, so filtering, collapsing, ranking,
    diffing and day-flipping all happen locally with no further requests. */
 
-/* ======================== SUPABASE CONFIGURATION =========================== */
+/* ====================== CONFIG — EDIT THE TWO SUPABASE VALUES ============== */
 const CONFIG = {
   // Your project's REST endpoint, from Supabase -> Project Settings -> API.
   SUPABASE_URL: "https://baiojghilzxhkebfblzv.supabase.co",
@@ -13,7 +13,7 @@ const CONFIG = {
   //
   // Publishing this in a public repo is correct and intended: the anon key
   // identifies the project and carries the `anon` Postgres role, and Row Level
-  // Security is what decides what that role may do. The schema migration grants
+  // Security is what decides what that role may do. supabase/schema.sql grants
   // it SELECT on `briefings` and `feed_reports` and nothing else — no insert,
   // no update, no sight of `seen_articles`.
   //
@@ -25,10 +25,6 @@ const CONFIG = {
   // The service_role key bypasses RLS. It belongs in GitHub Actions secrets for
   // the pipeline, and must never appear in this file.
   SUPABASE_ANON_KEY: "sb_publishable_nfLVr5Krdld9pxxr4f2CYQ_bsn0TNxx",
-
-  // Each application in the shared Supabase project owns one Postgres schema.
-  // PostgREST selects this schema through the Accept-Profile request header.
-  SUPABASE_SCHEMA: "news_aggregator",
 
   // Days of archive to pull on load. The pipeline prunes at ARCHIVE_KEEP_DAYS
   // (30), so this only needs to match it.
@@ -44,7 +40,7 @@ const CONFIG = {
    <body data-build>. A mismatch means one of the two files is stale — usually a
    cached script.js on GitHub Pages — which is exactly how a removed control ends
    up referenced by old code and throws "Cannot set properties of null". */
-const BUILD = "2026-08-20b";
+const BUILD = "2026-08-28a";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -92,6 +88,9 @@ let LB_SORT = "features"; // leaderboard sort key
 let LB_ALL_DAYS = false;  // leaderboard scope
 let DIFF_AGAINST = null;  // date the diff panel compares to
 let ACTIVE_TAB = "all";   // category tab; "all" shows every section
+let SHOW_ALL_NOTABLE = false;
+let CARD_SEQ = 0;
+const EXPANDED_CARDS = new Set();
 
 /* ------------------------------ preferences ------------------------------ */
 /* This is a real static site (not a sandboxed artifact), so localStorage is
@@ -356,7 +355,6 @@ async function fetchTable(table) {
     headers: {
       apikey: CONFIG.SUPABASE_ANON_KEY,
       Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`,
-      "Accept-Profile": CONFIG.SUPABASE_SCHEMA,
       Accept: "application/json",
     },
     cache: "no-store",
@@ -377,19 +375,16 @@ async function fetchTable(table) {
   }
   if (r.status === 404) {
     throw new Error(`Supabase has no "${table}" table (404). Run ` +
-      `the schema migration and expose "${CONFIG.SUPABASE_SCHEMA}" in the ` +
-      `Data API settings.${because}`);
+      `supabase/schema.sql in the SQL editor.${because}`);
   }
   throw new Error(`Could not read "${table}" from Supabase (${r.status})${because}.`);
 }
 
 async function buildStore() {
   if (!CONFIG.SUPABASE_URL || CONFIG.SUPABASE_URL.includes("YOUR-PROJECT-ID") ||
-      CONFIG.SUPABASE_ANON_KEY.startsWith("PUT_YOUR_") ||
-      !CONFIG.SUPABASE_SCHEMA) {
+      CONFIG.SUPABASE_ANON_KEY.startsWith("PUT_YOUR_")) {
     throw new Error("Supabase is not configured — set SUPABASE_URL and " +
-                    "SUPABASE_ANON_KEY and SUPABASE_SCHEMA at the top of " +
-                    "script.js.");
+                    "SUPABASE_ANON_KEY at the top of script.js.");
   }
 
   /* Feed health is secondary furniture: the health panel, leaderboard and diff
@@ -463,12 +458,35 @@ function renderTabs(dayData, filteredCats) {
     `<span class="tab__lead">// sections</span>` +
     tab("all", "All", totalShown) +
     names.map((n) => tab(n, n, countOf(n))).join("");
+
+  requestAnimationFrame(syncTabOverflow);
+}
+
+function syncTabOverflow() {
+  const bar = $("#tabBar");
+  if (!bar || bar.hidden) return;
+  const max = Math.max(0, bar.scrollWidth - bar.clientWidth);
+  bar.dataset.overflowLeft = String(max > 4 && bar.scrollLeft > 4);
+  bar.dataset.overflowRight = String(max > 4 && bar.scrollLeft < max - 4);
+}
+
+function revealActiveTab() {
+  const bar = $("#tabBar"), active = bar && $(".tab.is-on", bar);
+  if (!bar || !active) return;
+  const left = active.offsetLeft - 16;
+  const right = active.offsetLeft + active.offsetWidth + 16;
+  if (left < bar.scrollLeft) bar.scrollTo({ left, behavior: "smooth" });
+  else if (right > bar.scrollLeft + bar.clientWidth) {
+    bar.scrollTo({ left: right - bar.clientWidth, behavior: "smooth" });
+  }
+  requestAnimationFrame(syncTabOverflow);
 }
 
 function setActiveTab(key) {
   ACTIVE_TAB = key || "all";
   savePrefs({ activeTab: ACTIVE_TAB });
   applyFilter();
+  revealActiveTab();
   const board = el("#board");
   if (board && board.scrollIntoView) {
     board.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -568,10 +586,11 @@ function syncSearchUI(res) {
 }
 
 function syncScoreUI() {
-  el("#scoreRange").value = String(MIN_SCORE);
-  el("#scoreValue").textContent = MIN_SCORE === 0 ? "all" : `≥ ${MIN_SCORE}`;
-  el("#scoreValue").dataset.on = String(MIN_SCORE > 0);
-  el("#scoreReset").hidden = MIN_SCORE === 0;
+  $$("#scorePresets [data-min-score]").forEach((btn) => {
+    const on = Number(btn.dataset.minScore) === MIN_SCORE;
+    btn.classList.toggle("is-on", on);
+    btn.setAttribute("aria-pressed", String(on));
+  });
 }
 
 function applyFilter() {
@@ -621,6 +640,7 @@ function showIndex(i) {
   const { dates } = STORE;
   if (i < 0 || i >= dates.length) return;
   currentIndex = i;
+  SHOW_ALL_NOTABLE = false;
   applyFilter();                 // renders the day through the active filters
   renderHealth(dates[i]);
   renderLeaderboard();
@@ -699,8 +719,10 @@ function renderHealth(date) {
 
   el("#healthDot").dataset.level = severe ? "bad" : down ? "warn" : "good";
   el("#healthHeadline").innerHTML =
-    `Feed health — <b>${ok}</b>/${sources.length} contributing` +
-    (down ? `, <b class="down">${down}</b> not` : "");
+    `Feed health · <b>${ok}/${sources.length}</b>`;
+  el("#healthToggle").title =
+    `${ok} of ${sources.length} feeds contributing` +
+    (down ? ` · ${down} inactive · ${severe} need attention` : " · all healthy");
 
   const prevDate = previousDateWithReport(date);
   const deltas = computeDeltas(report, STORE.reports[prevDate]);
@@ -831,8 +853,11 @@ function renderLeaderboard() {
   const rows = tallySources(scope).sort(LB_SORTS[LB_SORT] || LB_SORTS.features);
 
   el("#boardHeadline").innerHTML =
-    `Source leaderboard — <b>${rows.length}</b> source${rows.length === 1 ? "" : "s"}` +
-    (LB_ALL_DAYS ? ` across ${scope.length} day${scope.length === 1 ? "" : "s"}` : "");
+    `Sources · <b>${rows.length}</b>` +
+    (LB_ALL_DAYS ? ` / ${scope.length}d` : "");
+  el("#boardToggle").title =
+    `${rows.length} ranked source${rows.length === 1 ? "" : "s"}` +
+    (LB_ALL_DAYS ? ` across ${scope.length} archived days` : ` for ${scope[0]}`);
 
   const maxFeat = Math.max(1, ...rows.map((r) => r.features));
   el("#lbTable").innerHTML = rows.length ? `
@@ -935,8 +960,9 @@ function renderDiff() {
 
   el("#diffDot").dataset.level = d.added.length ? "good" : "warn";
   el("#diffHeadline").innerHTML =
-    `Diff view — <b>${d.added.length}</b> new, <b>${d.dropped.length}</b> gone, ` +
-    `${d.carried.length} carried over`;
+    `Changes · <b>+${d.added.length}</b> / <b class="down">−${d.dropped.length}</b>`;
+  el("#diffToggle").title =
+    `${d.added.length} new · ${d.dropped.length} gone · ${d.carried.length} carried over`;
 
   el("#diffGrid").innerHTML =
     diffList(`New in ${baseDate}`, "add", d.added) +
@@ -982,6 +1008,17 @@ function buildMeter(score) {
   return frag;
 }
 
+function paintCardDetails(card, open) {
+  if (!card) return;
+  card.dataset.detailsOpen = String(open);
+  const toggle = $(".card__details-toggle", card);
+  const details = $(".card__details", card);
+  const label = $(".card__details-label", card);
+  if (toggle) toggle.setAttribute("aria-expanded", String(open));
+  if (details) details.setAttribute("aria-hidden", String(!open));
+  if (label) label.textContent = open ? "Hide details" : "Details";
+}
+
 function renderCard(item) {
   const tpl = $("#cardTpl");
   if (!tpl || !tpl.content) {
@@ -989,7 +1026,12 @@ function renderCard(item) {
                     "index.html and script.js are out of sync.");
   }
   const node = tpl.content.cloneNode(true);
+  const card = $(".card", node);
   const score = typeof item.score === "number" ? item.score : 8;
+  const cardKey = keyOf(item);
+  const detailsId = `card-details-${++CARD_SEQ}`;
+
+  card.dataset.cardKey = cardKey;
 
   $(".meter", node).appendChild(buildMeter(score));
   $(".meter", node).title = `relevance ${score}/10`;
@@ -1002,14 +1044,30 @@ function renderCard(item) {
   titleLink.textContent = item.title || "Untitled";
   titleLink.href = item.url || "#";
 
-  $(".card__why", node).textContent = item.reasoning || "";
+  const why = $(".card__why", node);
+  const whyText = $(".card__why-text", node);
+  whyText.textContent = item.reasoning || "";
+  why.hidden = !item.reasoning;
 
   const ul = $(".card__bullets", node);
-  (item.bullets || []).forEach((b) => {
+  const bullets = item.bullets || [];
+  bullets.forEach((b) => {
     const li = document.createElement("li");
     li.textContent = b;
     ul.appendChild(li);
   });
+
+  const toggle = $(".card__details-toggle", node);
+  const details = $(".card__details", node);
+  toggle.dataset.cardDetails = cardKey;
+  toggle.setAttribute("aria-controls", detailsId);
+  details.id = detailsId;
+  if (!bullets.length) {
+    toggle.hidden = true;
+    details.hidden = true;
+  } else {
+    paintCardDetails(card, EXPANDED_CARDS.has(cardKey));
+  }
 
   $(".card__link", node).href = item.url || "#";
   return node;
@@ -1066,6 +1124,7 @@ function setCategoryCollapsed(name, collapsed, { persist = true } = {}) {
   if (collapsed) COLLAPSED.add(name); else COLLAPSED.delete(name);
   paintCategory(sectionFor(name), collapsed);
   if (persist) savePrefs({ collapsed: [...COLLAPSED] });
+  requestReadProgress();
 }
 
 function toggleCategory(name) {
@@ -1151,12 +1210,16 @@ function renderCategory(name, items) {
 }
 
 function renderNotable(items) {
+  const limit = 24;
+  const visibleItems = SHOW_ALL_NOTABLE ? items : items.slice(0, limit);
   const wrap = document.createElement("section");
   wrap.className = "notable";
-  wrap.innerHTML = `<h3 class="notable__head">// Also notable</h3>`;
+  wrap.innerHTML = `<h3 class="notable__head"><span>// Also notable</span>` +
+    `<span class="notable__head-count">${items.length} items</span></h3>`;
   const list = document.createElement("div");
   list.className = "notable__list";
-  items.forEach((it) => {
+  list.id = "notableList";
+  visibleItems.forEach((it) => {
     const a = document.createElement("a");
     a.className = "notable__item";
     a.href = it.url || "#";
@@ -1171,11 +1234,24 @@ function renderNotable(items) {
     list.appendChild(a);
   });
   wrap.appendChild(list);
+  if (items.length > limit) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "notable__more";
+    button.dataset.notableToggle = "true";
+    button.setAttribute("aria-controls", list.id);
+    button.setAttribute("aria-expanded", String(SHOW_ALL_NOTABLE));
+    button.textContent = SHOW_ALL_NOTABLE
+      ? "Show fewer notable items"
+      : `Show ${items.length - limit} more notable items`;
+    wrap.appendChild(button);
+  }
   return wrap;
 }
 
 function render(data, filterRes) {
   board.innerHTML = "";
+  CARD_SEQ = 0;
   const cats = data.categories || {};
   const catNames = orderCategories(
     Object.keys(cats).filter((k) => cats[k]?.length));
@@ -1249,6 +1325,7 @@ function render(data, filterRes) {
   // The "n/m collapsed" readout is derived state; recompute it here so a day
   // flip or a filter change cannot leave a stale count on screen.
   syncCollapseUI();
+  requestReadProgress();
 }
 
 function renderError(msg) {
@@ -1271,6 +1348,24 @@ function renderError(msg) {
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* ----------------------------- read progress ----------------------------- */
+let READ_PROGRESS_FRAME = 0;
+
+function syncReadProgress() {
+  READ_PROGRESS_FRAME = 0;
+  const bar = el("#readProgressBar");
+  if (!bar) return;
+  const maxScroll = Math.max(1,
+    document.documentElement.scrollHeight - window.innerHeight);
+  const progress = Math.min(1, Math.max(0, window.scrollY / maxScroll));
+  bar.style.transform = `scaleX(${progress})`;
+}
+
+function requestReadProgress() {
+  if (READ_PROGRESS_FRAME) return;
+  READ_PROGRESS_FRAME = requestAnimationFrame(syncReadProgress);
 }
 
 /* --------------------------- asset version check -------------------------- */
@@ -1314,7 +1409,10 @@ function checkAssetVersions() {
 
   // restore preferences before the first render
   const prefs = loadPrefs();
-  MIN_SCORE = Number.isFinite(prefs.minScore) ? Math.min(10, Math.max(0, prefs.minScore)) : 0;
+  // Migrate values saved by the previous free-form range input onto the new
+  // explicit reading modes so a visible preset always matches the active cut.
+  const savedScore = Number.isFinite(prefs.minScore) ? prefs.minScore : 0;
+  MIN_SCORE = savedScore >= 9 ? 9 : savedScore >= 8 ? 8 : savedScore >= 7 ? 7 : 0;
   COLLAPSED = new Set(Array.isArray(prefs.collapsed) ? prefs.collapsed : []);
   LB_SORT = LB_SORTS[prefs.lbSort] ? prefs.lbSort : "features";
   LB_ALL_DAYS = !!prefs.lbAllDays;
@@ -1353,15 +1451,14 @@ function checkAssetVersions() {
         input.value = ""; QUERY = ""; applyFilter(); input.focus();
       });
 
-      // score threshold
-      setProp("#scoreRange", "value", String(MIN_SCORE));
-      on("#scoreRange", "input", (e) => {
-        MIN_SCORE = Number(e.target.value) || 0;
-        savePrefs({ minScore: MIN_SCORE });
-        applyFilter();
-      });
-      on("#scoreReset", "click", () => {
-        MIN_SCORE = 0; savePrefs({ minScore: 0 }); applyFilter();
+      // Score presets are explicit reading modes rather than an unlabelled
+      // continuous slider: all noteworthy items, or increasingly strict cuts.
+      $$("#scorePresets [data-min-score]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          MIN_SCORE = Number(btn.dataset.minScore) || 0;
+          savePrefs({ minScore: MIN_SCORE });
+          applyFilter();
+        });
       });
 
       // category collapse — ONE delegated listener on the board. Survives every
@@ -1379,6 +1476,31 @@ function checkAssetVersions() {
         if (btn) {
           e.preventDefault();
           toggleCategory(btn.dataset.catToggle);
+          return;
+        }
+
+        const detailsToggle = node.closest("[data-card-details]");
+        if (detailsToggle) {
+          e.preventDefault();
+          const card = detailsToggle.closest(".card");
+          if (!card) return;
+          const key = card.dataset.cardKey || detailsToggle.dataset.cardDetails;
+          const open = card.dataset.detailsOpen !== "true";
+          if (open) EXPANDED_CARDS.add(key); else EXPANDED_CARDS.delete(key);
+          paintCardDetails(card, open);
+          requestReadProgress();
+          return;
+        }
+
+        const notableToggle = node.closest("[data-notable-toggle]");
+        if (notableToggle) {
+          e.preventDefault();
+          SHOW_ALL_NOTABLE = !SHOW_ALL_NOTABLE;
+          applyFilter();
+          requestAnimationFrame(() => {
+            const replacement = $("[data-notable-toggle]");
+            if (replacement) replacement.focus({ preventScroll: true });
+          });
         }
       });
       // Tab bar — ONE delegated listener; the bar is rebuilt on every render.
@@ -1388,6 +1510,7 @@ function checkAssetVersions() {
           const btn = e.target.closest && e.target.closest("[data-tab]");
           if (btn && tabBar.contains(btn)) setActiveTab(btn.dataset.tab);
         });
+        tabBar.addEventListener("scroll", syncTabOverflow, { passive: true });
       }
 
       on("#collapseAll", "click", (e) => { e.preventDefault(); setAllCategories(true); });
@@ -1421,10 +1544,27 @@ function checkAssetVersions() {
         if (!toggle || !body) return;
         toggle.addEventListener("click", () => {
           const open = toggle.getAttribute("aria-expanded") === "true";
+          if (!open) {
+            $$(".diagnostics .health").forEach((panel) => {
+              const peerToggle = $(".health__toggle", panel);
+              const peerBody = $(".health__body", panel);
+              if (peerToggle && peerToggle !== toggle) peerToggle.setAttribute("aria-expanded", "false");
+              if (peerBody && peerToggle !== toggle) peerBody.hidden = true;
+              if (peerToggle !== toggle) panel.classList.remove("is-expanded");
+            });
+          }
           toggle.setAttribute("aria-expanded", String(!open));
           body.hidden = open;
+          toggle.closest(".health")?.classList.toggle("is-expanded", !open);
+          requestReadProgress();
         });
       });
+
+      window.addEventListener("resize", () => {
+        syncTabOverflow();
+        requestReadProgress();
+      }, { passive: true });
+      window.addEventListener("scroll", requestReadProgress, { passive: true });
 
       // keyboard: "/" filter, j/k days, c/e collapse-expand
       document.addEventListener("keydown", (e) => {
