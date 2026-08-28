@@ -4,7 +4,7 @@
    Two API calls pull every day at once, so filtering, collapsing, ranking,
    diffing and day-flipping all happen locally with no further requests. */
 
-/* ====================== CONFIG — EDIT THE TWO SUPABASE VALUES ============== */
+/* ======================== SUPABASE CONFIGURATION =========================== */
 const CONFIG = {
   // Your project's REST endpoint, from Supabase -> Project Settings -> API.
   SUPABASE_URL: "https://baiojghilzxhkebfblzv.supabase.co",
@@ -13,18 +13,21 @@ const CONFIG = {
   //
   // Publishing this in a public repo is correct and intended: the anon key
   // identifies the project and carries the `anon` Postgres role, and Row Level
-  // Security is what decides what that role may do. supabase/schema.sql grants
+  // Security is what decides what that role may do. The schema migration grants
   // it SELECT on `briefings` and `feed_reports` and nothing else — no insert,
   // no update, no sight of `seen_articles`.
   //
   // That guarantee is entirely load-bearing. With RLS disabled on those tables
-  // this key becomes public WRITE access, because Supabase's default grants on
-  // the `public` schema hand anon full DML. If you ever add a table the board
-  // reads, enable RLS on it in the same breath.
+  // this key can become public WRITE access. If you ever add a table the board
+  // reads, enable RLS and grant only the required operations in the same breath.
   //
   // The service_role key bypasses RLS. It belongs in GitHub Actions secrets for
   // the pipeline, and must never appear in this file.
   SUPABASE_ANON_KEY: "sb_publishable_nfLVr5Krdld9pxxr4f2CYQ_bsn0TNxx",
+
+  // This shared Supabase project isolates each application in its own schema.
+  // Raw PostgREST requests select it through the Accept-Profile header.
+  SUPABASE_SCHEMA: "news_aggregator",
 
   // Days of archive to pull on load. The pipeline prunes at ARCHIVE_KEEP_DAYS
   // (30), so this only needs to match it.
@@ -40,7 +43,7 @@ const CONFIG = {
    <body data-build>. A mismatch means one of the two files is stale — usually a
    cached script.js on GitHub Pages — which is exactly how a removed control ends
    up referenced by old code and throws "Cannot set properties of null". */
-const BUILD = "2026-08-28a";
+const BUILD = "2026-08-28b";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -355,6 +358,7 @@ async function fetchTable(table) {
     headers: {
       apikey: CONFIG.SUPABASE_ANON_KEY,
       Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`,
+      "Accept-Profile": CONFIG.SUPABASE_SCHEMA,
       Accept: "application/json",
     },
     cache: "no-store",
@@ -374,17 +378,17 @@ async function fetchTable(table) {
       `SUPABASE_ANON_KEY in script.js.${because}`);
   }
   if (r.status === 404) {
-    throw new Error(`Supabase has no "${table}" table (404). Run ` +
-      `supabase/schema.sql in the SQL editor.${because}`);
+    throw new Error(`Supabase cannot expose "${CONFIG.SUPABASE_SCHEMA}.${table}" ` +
+      `(404). Confirm the schema is listed in Data API → Exposed schemas.${because}`);
   }
   throw new Error(`Could not read "${table}" from Supabase (${r.status})${because}.`);
 }
 
 async function buildStore() {
   if (!CONFIG.SUPABASE_URL || CONFIG.SUPABASE_URL.includes("YOUR-PROJECT-ID") ||
-      CONFIG.SUPABASE_ANON_KEY.startsWith("PUT_YOUR_")) {
-    throw new Error("Supabase is not configured — set SUPABASE_URL and " +
-                    "SUPABASE_ANON_KEY at the top of script.js.");
+      CONFIG.SUPABASE_ANON_KEY.startsWith("PUT_YOUR_") || !CONFIG.SUPABASE_SCHEMA) {
+    throw new Error("Supabase is not configured — set SUPABASE_URL, " +
+                    "SUPABASE_ANON_KEY, and SUPABASE_SCHEMA at the top of script.js.");
   }
 
   /* Feed health is secondary furniture: the health panel, leaderboard and diff

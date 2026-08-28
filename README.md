@@ -12,8 +12,7 @@ feeds.txt ─► ingest ─► gatekeeper (GPT-5.6) ─► editor (GPT-5.6) ─�
 ```
 
 ### Storage
-Three tables in the `news_aggregator` Postgres schema, created by
-`supabase/migrations/001_news_aggregator_schema.sql`:
+Three tables in the custom `news_aggregator` schema:
 
 | Table | Key | Holds |
 | --- | --- | --- |
@@ -24,17 +23,12 @@ Three tables in the `news_aggregator` Postgres schema, created by
 **Two keys, two jobs.** The pipeline writes with the **service_role** key, which
 bypasses Row Level Security — a full-database credential that lives only in Actions
 secrets. The dashboard reads with the **anon** key, which is committed to `docs/` on
-purpose: that is what an anon key is for, and RLS is what makes it safe. The policies
-in the migration grant it `SELECT` on `briefings` and `feed_reports` and nothing else.
+purpose: that is what an anon key is for, and RLS is what makes it safe. The installed
+schema policies grant it `SELECT` on `briefings` and `feed_reports` and nothing else.
 
-Every REST request explicitly selects `news_aggregator`: reads send PostgREST's
-`Accept-Profile` header and writes send `Content-Profile`. The schema is an ownership
-and cleanup boundary, not a secret boundary. All applications in this Supabase project
-share the same elevated backend credential, so a leaked service key can affect them all.
-
-**RLS is load-bearing, not hygiene.** Supabase's default grants on the `public` schema
-give `anon` full DML, so with RLS disabled the key in `docs/script.js` is public *write*
-access. `seen_articles` carries RLS with no policy at all, which denies every role except
+**RLS is load-bearing, not hygiene.** Database grants and RLS together determine
+what the key in `docs/script.js` may do, so the browser role must remain read-only.
+`seen_articles` carries RLS with no policy at all, which denies every role except
 `service_role`.
 
 ## Layout
@@ -51,15 +45,11 @@ news-aggregator/
 │   ├── llm.py                    # shared model client (OpenAI + Gemini, retries, failover)
 │   ├── test_llm_fallback.py      # offline simulation of the failover chain
 │   ├── test_gatekeeper_parsing.py # verdict-shape + empty-briefing guard tests
-│   ├── test_supabase_store.py    # persistence against a stub PostgREST
 │   ├── run.py                    # orchestrator (runs 1→4)
 │   ├── prompts/{gatekeeper,editor}.txt
 │   └── requirements.txt
 └── docs/                         # GitHub Pages root
     ├── index.html · style.css · script.js
-└── supabase/
-    ├── migrations/               # backup, schema creation, and data copy SQL
-    └── cleanup/                  # optional guarded legacy-table removal
 ```
 
 ## Models
@@ -232,88 +222,40 @@ dedupe) topped out at a single 7, which is a real outcome, not a bug.
 Simulate the whole chain without touching the API — no key or network needed:
 
 ```
-cd pipeline && python3 test_llm_fallback.py        # provider chain + failover
-cd pipeline && python3 test_gatekeeper_parsing.py  # verdict shapes + the guard
-cd pipeline && python3 test_supabase_store.py      # storage, paging, schema headers
+cd pipeline && python test_llm_fallback.py        # provider chain + failover
+cd pipeline && python test_gatekeeper_parsing.py  # verdict shapes + the guard
+cd pipeline && python test_supabase_store.py      # storage, paging, prune, RLS-less stub
 ```
 
 > Note: Gemini 3.x deprecates the `temperature` / `top_p` / `top_k` sampling params
 > (silently ignored on the newest models). `llm.py` no longer sends them — forced-JSON
 > output plus the schema in each prompt keep responses well-formed.
 
-## Migrating the existing Supabase deployment
-
-These instructions assume this project's current Supabase project will be the shared
-project retained for all five applications. The SQL copies the existing `public` rows;
-it does not delete or modify them during cutover.
-
-1. **Pause writes.** In GitHub, open Actions → daily-briefing → `...` → Disable
-   workflow. Do this between daily runs so `public` cannot receive a new row after the
-   copy.
-2. **Back up the current tables.** Log in to Supabase, open this project, select
-   **SQL Editor → New query**, paste the complete contents of
-   `supabase/migrations/000_backup_public_tables_20260824.sql`, and click **Run**.
-   The result must list row counts for all three tables. This creates a private frozen
-   schema named `migration_backup_news_aggregator_20260824`. For an off-site copy,
-   also open Table Editor and export each `public` table as CSV.
-3. **Create the isolated schema.** In a new SQL Editor query, run the complete contents
-   of `supabase/migrations/001_news_aggregator_schema.sql`.
-4. **Copy the live rows.** Run
-   `supabase/migrations/002_copy_public_data.sql`. Compare its three returned counts
-   with the backup counts from step 2. Then run
-   `supabase/migrations/003_verify_migration.sql`; every boolean result should be
-   `true`.
-5. **Expose the schema to PostgREST.** In the Supabase dashboard, open the Data API
-   settings (search settings for **Exposed schemas**), add `news_aggregator` without
-   removing the existing entries, and save. The SQL migration already supplies the
-   least-privilege schema/table grants and RLS policies.
-6. **Deploy this repository.** The workflow now sets
-   `SUPABASE_SCHEMA=news_aggregator`; the Python client sends `Accept-Profile` for GET
-   and `Content-Profile` for POST/DELETE. Existing `SUPABASE_URL` and
-   `SUPABASE_SERVICE_KEY` repository secrets remain unchanged.
-7. **Publish the dashboard.** The live site is served from the **separate
+## One-time setup
+1. **Create the Supabase project** (or reuse one), then provision the three tables
+   and their RLS policies in the custom `news_aggregator` schema. Add that schema
+   under Project Settings → Data API → Exposed schemas.
+2. **Copy both keys** from Project Settings → API: the `anon` key for the dashboard
+   and the `service_role` key for the pipeline.
+3. **Get an OpenAI API key** (platform.openai.com) — the primary provider — and a
+   **Gemini API key** from Google AI Studio for the fallback (free tier is sufficient).
+4. **Repo secrets** (Settings → Secrets → Actions): `OPENAI_API_KEY`, `GEMINI_API_KEY`,
+   `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`. A missing `OPENAI_API_KEY` does not break
+   the run — it falls through to Gemini and flags the dashboard — but it does mean you
+   are not testing what you think you are testing.
+5. **Dashboard config:** in `docs/script.js` set `CONFIG.SUPABASE_URL`,
+   `CONFIG.SUPABASE_ANON_KEY`, and `CONFIG.SUPABASE_SCHEMA`. The **anon** key,
+   never `service_role`. The shared production project uses `news_aggregator`.
+6. **Publish the dashboard.** The live site is served from the **separate
    `kalistampai/news` repo**, which holds byte-identical copies of `docs/`
    (`index.html`, `script.js`, `style.css`, `.nojekyll`) — not from this repo's
    `/docs`. A front-end change is not live until it is pushed to **both**.
-8. **Test the cutover.** Re-enable the workflow, run it manually, and verify that the
-   dashboard loads. In Supabase Table Editor, select the `news_aggregator` schema and
-   confirm that today's rows changed in `briefings`/`feed_reports` and that
-   `seen_articles` contains data. Run migration `003` once more; every check should
-   still be `true`.
-9. **Remove the legacy copy later.** After at least one successful scheduled run, run
-   `supabase/cleanup/remove_legacy_public_tables.sql`. It refuses to proceed if any
-   legacy primary key is absent from the target. Keep the frozen backup until you are
-   comfortable deleting it manually with
-   `drop schema migration_backup_news_aggregator_20260824 cascade;`.
-
-For a brand-new installation, skip backup/copy/cleanup: run migration `001`, expose
-`news_aggregator`, configure the keys, and deploy.
-
-### Local verification and deployment commands
-
-```bash
-cd /home/ks/Documents/projects/news-aggregator
-python3 pipeline/test_supabase_store.py
-python3 pipeline/test_gatekeeper_parsing.py
-python3 pipeline/test_llm_fallback.py
-git diff --check
-git status --short
-git add .github/workflows/daily.yml README.md docs/script.js pipeline/store.py \
-  pipeline/seen.py pipeline/test_supabase_store.py supabase
-git commit -m "migrate: isolate news aggregator in Postgres schema"
-git push origin main
-```
-
-The required GitHub Actions secrets remain `OPENAI_API_KEY`, `GEMINI_API_KEY`,
-`SUPABASE_URL`, and `SUPABASE_SERVICE_KEY`. In `docs/script.js`, expose only the
-publishable/anon key—never the service-role key.
 
 ## Run it
 - Manual: Actions tab → **daily-briefing** → *Run workflow*.
 - Local: `cd pipeline && pip install -r requirements.txt`, export the env vars
-  (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`,
-  `SUPABASE_SCHEMA=news_aggregator`), then
-  `python3 run.py`. Intermediate
+  (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`), then
+  `python run.py`. Intermediate
   artifacts (`raw_articles.json`, `scored_articles.json`, `briefing.json`) are written
   in place for inspection.
 

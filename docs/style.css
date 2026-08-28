@@ -27,7 +27,7 @@
      does not match BUILD in script.js, the browser/CDN is serving a stale
      style.css and the page says so out loud instead of failing silently.
      Bump this together with ?v=, data-build, and BUILD. */
-  --build: "2026-08-28a";
+  --build: "2026-08-28b";
 }
 
 * { box-sizing: border-box; }
