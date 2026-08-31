@@ -23,7 +23,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=2026-08-30d" />
+  <link rel="stylesheet" href="style.css?v=2026-08-30e" />
 </head>
 <!-- STARTS LOCKED, with the gate itself still hidden — deliberately a blank
      page for the moment boot() takes to check the session. The alternative
@@ -31,7 +31,7 @@
      before the gate covers it, which flashes the previous reader's briefing at
      whoever opens the laptop next. boot() then either showGate() or
      hideGate()+startApp(); neither state is reachable before that decision. -->
-<body class="is-locked" data-build="2026-08-30d">
+<body class="is-locked" data-build="2026-08-30e">
   <noscript>
     <p style="max-width:34rem;margin:18vh auto;padding:0 1.5rem;
               font:14px/1.6 system-ui,sans-serif;color:#a8b6c4;text-align:center">
@@ -310,18 +310,21 @@
         </section>
 
         <section class="set">
-          <h3 class="set__h">Provider keys</h3>
-          <p class="set__help">
-            Stored in Supabase and read by the pipeline at run time.
-            <b>Every provider stays visible on purpose</b> &mdash; the failover
-            chain crosses providers, so the keys you are <em>not</em> using right
-            now are exactly the ones that rescue a run when your primary is
-            capped. The highlighted row is the provider selected below. A filled
-            dot means a key is stored; the value is never shown back as a
-            masked preview, which invites reading a real key off a shared screen.
-          </p>
-          <!-- Rows are generated from the PROVIDERS registry in script.js so a
-               provider cannot exist in one file and not the other. -->
+          <h3 class="set__h">AI provider</h3>
+
+          <label class="set__field">
+            <span class="set__label">Provider</span>
+            <select id="setProvider"></select>
+            <span class="set__hint">
+              Keys are stored separately per provider, so switching back doesn't
+              lose the other one.
+            </span>
+          </label>
+
+          <!-- Only the selected provider's key row is visible. All nine inputs
+               stay in the DOM (hidden, not destroyed) so a key typed under one
+               provider survives switching to another and back before Save —
+               destroying them would silently discard unsaved edits. -->
           <div id="providerKeys"></div>
         </section>
 
@@ -330,32 +333,25 @@
           <p class="set__help">
             Two stages, each with its own model. The <b>gatekeeper</b> scores and
             filters every article; the <b>editor</b> writes the cards you read.
-            Pick a provider to list the models its key can actually see.
+            Both use the provider selected above.
           </p>
 
-          <label class="set__field">
-            <span class="set__label">Provider</span>
-            <span class="set__row">
-              <!-- Options generated from the same registry as the key rows. -->
-              <select id="setProvider"></select>
-              <button type="button" class="set__btn" id="refreshModels"
-                      title="List models this key can use">Refresh</button>
-            </span>
-            <span class="set__hint" id="discoveryHint">
-              Enter that provider's key above, then Refresh.
-            </span>
-          </label>
-
-          <!-- Each stage keeps a "Custom…" escape hatch. Several of these
-               providers do not send CORS headers on /models, so browser-side
-               discovery can legitimately fail against a perfectly good key —
-               typing the exact id must stay possible or that provider becomes
-               unusable from this screen. -->
+          <!-- Each stage keeps a "Custom…" escape hatch. Several providers do
+               not send CORS headers on /models, so browser-side discovery can
+               legitimately fail against a perfectly good key — typing the exact
+               id must stay possible or that provider becomes unusable here. -->
           <label class="set__field">
             <span class="set__label">Gatekeeper model</span>
-            <select id="setGatekeeper"></select>
+            <span class="set__row">
+              <select id="setGatekeeper"></select>
+              <button type="button" class="set__btn" id="refreshModels"
+                      title="List the models this key can actually use">Refresh</button>
+            </span>
             <input type="text" id="setGatekeeperCustom" hidden spellcheck="false"
                    autocomplete="off" placeholder="exact model id" />
+            <span class="set__hint" id="discoveryHint">
+              Add the key above, then Refresh to list the models it can use.
+            </span>
           </label>
 
           <label class="set__field">
@@ -439,6 +435,13 @@
             order, or (optional) a different provider added at the end as a
             last resort after this one is fully exhausted.
           </p>
+          <p class="set__help">
+            Listing another provider's model here only works if that provider
+            has a key stored. To add one, switch the <b>Provider</b> dropdown
+            above, enter its key, and switch back — keys are kept per provider,
+            so nothing you already entered is lost, and <b>Save</b> writes all
+            of them at once.
+          </p>
           <label class="set__field">
             <span class="set__label">Gatekeeper fallbacks</span>
             <input type="text" id="setGatekeeperChain" spellcheck="false"
@@ -478,6 +481,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.111.0/dist/umd/supabase.min.js"
           integrity="sha384-fPWur1rx/DE6YtXP/x0MD6dd90RgnVsz5yX/DIg7CcVAnTBZsENWuIcpvVTM39ti"
           crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script src="script.js?v=2026-08-30d"></script>
+  <script src="script.js?v=2026-08-30e"></script>
 </body>
 </html>

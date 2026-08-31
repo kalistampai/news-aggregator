@@ -43,7 +43,7 @@ const CONFIG = {
    <body data-build>. A mismatch means one of the two files is stale — usually a
    cached script.js on GitHub Pages — which is exactly how a removed control ends
    up referenced by old code and throws "Cannot set properties of null". */
-const BUILD = "2026-08-30d";
+const BUILD = "2026-08-30e";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -1659,8 +1659,12 @@ function renderProviderControls() {
     const row = document.createElement("label");
     row.className = "set__field";
     row.dataset.providerKey = p.id;
+    // Named for its provider ("Gemini API key"), so the field on screen can
+    // never be mistaken for a different provider's once the others are hidden.
+    // The dot says only stored / not stored — never a masked preview of the
+    // value, which invites reading a real key off a shared screen.
     row.innerHTML =
-      `<span class="set__label">${escapeHtml(p.label)} ` +
+      `<span class="set__label">${escapeHtml(p.label)} API key ` +
         `<i class="set__dot" id="dot-${p.id}"></i></span>` +
       `<span class="set__reveal">` +
         `<input type="password" id="key-${p.id}" autocomplete="off" ` +
@@ -1668,7 +1672,10 @@ function renderProviderControls() {
         `<button type="button" class="set__eye" data-reveal="key-${p.id}" ` +
           `title="Show / hide">&#128065;</button>` +
       `</span>` +
-      `<span class="set__hint">${escapeHtml(p.keysUrl)}</span>`;
+      `<span class="set__hint">Key from ` +
+        `<a href="https://${escapeHtml(p.keysUrl)}" target="_blank" ` +
+        `rel="noopener noreferrer">${escapeHtml(p.keysUrl)}</a>. ` +
+        `Stored in Supabase and read by the pipeline at run time.</span>`;
     host.appendChild(row);
   }
 }
@@ -1769,22 +1776,23 @@ function syncKeyDots() {
   }
 }
 
-/* Show only the controls that mean something for the selected provider.
-   A reasoning-effort dropdown under Gemini is not a harmless extra field — it
-   reads as a setting that applies, and it does not.
+/* Show only the controls that mean something for the selected provider: its key
+   row, and any tuning that exists solely for it (a reasoning-effort dropdown
+   under Gemini is not a harmless extra field — it reads as a setting that
+   applies, and it does not).
 
-   The KEY fields are deliberately exempt and stay visible for every provider.
-   Hiding them would copy `daily`, which uses exactly one provider at a time,
-   but this pipeline fails over ACROSS providers: the key you are not using is
-   the one that rescues the 06:17 run when your primary is capped. Hiding it
-   behind a dropdown would hide the thing that makes the run fault-tolerant.
-   The active provider's row is highlighted instead. */
+   Non-active key inputs are HIDDEN, never removed. They keep their values, so
+   typing a key under one provider, switching away, and switching back does not
+   lose it — and saveSettings() still reads all nine, so every stored key is
+   persisted on Save regardless of which one happens to be on screen. That is
+   what makes the failover chain safe to span providers even though only one
+   key is visible at a time. */
 function syncProviderUI(provider = el("#setProvider").value) {
   $$("[data-provider]").forEach((node) => {
     node.hidden = node.dataset.provider !== provider;
   });
   $$("[data-provider-key]").forEach((node) => {
-    node.dataset.active = String(node.dataset.providerKey === provider);
+    node.hidden = node.dataset.providerKey !== provider;
   });
 }
 

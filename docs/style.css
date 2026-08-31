@@ -27,7 +27,7 @@
      does not match BUILD in script.js, the browser/CDN is serving a stale
      style.css and the page says so out loud instead of failing silently.
      Bump this together with ?v=, data-build, and BUILD. */
-  --build: "2026-08-30d";
+  --build: "2026-08-30e";
 }
 
 * { box-sizing: border-box; }
@@ -1085,7 +1085,7 @@ body.is-locked .footer { display: none !important; }
   .mast__btn span { display: none; }
 }
 
-/* -------------------- provider-aware settings (build 2026-08-30d) --------- */
+/* -------------------- provider-aware settings (build 2026-08-30e) --------- */
 /* Provider-specific notes, shown in place of a tuning control for providers
    that expose none — so the section never looks like it failed to load. */
 .set__note {
@@ -1097,14 +1097,14 @@ body.is-locked .footer { display: none !important; }
 }
 .set__note b { color: var(--ink-dim); }
 
-/* Key rows stay visible for every provider (failover needs them all); the
-   selected one is marked rather than isolated. */
+/* Only the selected provider's key row is shown; the rest stay in the DOM
+   (hidden) so switching providers never discards an unsaved key. */
 .set__field[data-provider-key] {
-  padding: 8px 10px; margin-left: -10px; margin-right: -10px;
-  border-left: 2px solid transparent; border-radius: 0 6px 6px 0;
-  transition: background .15s, border-color .15s;
+  padding: 10px 12px; margin: 0 -12px 14px;
+  background: var(--accent-soft);
+  border-left: 2px solid var(--accent); border-radius: 0 6px 6px 0;
 }
-.set__field[data-provider-key][data-active="true"] {
-  background: var(--accent-soft); border-left-color: var(--accent);
-}
-.set__field[data-provider-key][data-active="true"] .set__label { color: var(--ink); }
+.set__field[data-provider-key] .set__label { color: var(--ink); }
+.set__hint a { color: var(--accent); text-decoration: none;
+               border-bottom: 1px dotted var(--accent-dim); }
+.set__hint a:hover { border-bottom-color: var(--accent); }
