@@ -134,6 +134,27 @@ def select(table: str, params: dict) -> list[dict]:
     return out
 
 
+def select_one(table: str, params: dict) -> dict | None:
+    """GET a single row, or None when the filter matches nothing.
+
+    Separate from select() on purpose: that function requires an `order` because
+    offset paging over an unordered result is unstable, which is the right rule
+    for a collection and pure noise for a singleton lookup by primary key.
+
+    Returns None rather than raising when the table does not exist. The only
+    caller is the settings loader, and a missing table there means "this project
+    has not run migration 004 yet" — which must degrade to the environment
+    defaults, not take down the morning run.
+    """
+    r = requests.get(_endpoint(table), headers=_headers(),
+                     params={**params, "limit": 1}, timeout=_TIMEOUT)
+    if r.status_code in (404, 406):
+        return None
+    _check(r, f"select one from {table}")
+    rows = r.json()
+    return rows[0] if rows else None
+
+
 def upsert(table: str, rows: list[dict]) -> int:
     """INSERT ... ON CONFLICT DO UPDATE, keyed by the table's primary key."""
     if not rows:

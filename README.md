@@ -6,30 +6,45 @@ briefing, and stores the result in Supabase Postgres. A static GitHub Pages dash
 reads it back. **No server, no SMTP.**
 
 ```
-feeds.txt ─► ingest ─► gatekeeper (GPT-5.6) ─► editor (GPT-5.6) ─► dispatch ─► Supabase
-                                                                      │
-                                               GitHub Pages dashboard ┘ (anon key, RLS read-only)
+                          ┌─ app_settings (which model, whose keys) ─┐
+                          ▼                                          │
+feeds.txt ─► ingest ─► gatekeeper ─► editor ─► dispatch ─► Supabase   │
+                                                              │      │
+                            GitHub Pages dashboard ────────────┴──────┘
+                            (sign-in required; settings written here)
 ```
 
 ### Storage
-Three tables in the custom `news_aggregator` schema:
+Four tables in the custom `news_aggregator` schema:
 
 | Table | Key | Holds |
 | --- | --- | --- |
 | `briefings` | `date` | the day's briefing, exactly the JSON the editor produced |
 | `feed_reports` | `date` | the slim feed-health snapshot the dashboard renders |
 | `seen_articles` | `id` | article ids already published, for cross-run dedupe |
+| `app_settings` | `id=1` | model choice + provider API keys, written by the dashboard |
 
 **Two keys, two jobs.** The pipeline writes with the **service_role** key, which
 bypasses Row Level Security — a full-database credential that lives only in Actions
-secrets. The dashboard reads with the **anon** key, which is committed to `docs/` on
-purpose: that is what an anon key is for, and RLS is what makes it safe. The installed
-schema policies grant it `SELECT` on `briefings` and `feed_reports` and nothing else.
+secrets. The dashboard uses the **publishable** key, which is committed to `docs/` on
+purpose: it identifies the project and nothing more.
 
-**RLS is load-bearing, not hygiene.** Database grants and RLS together determine
-what the key in `docs/script.js` may do, so the browser role must remain read-only.
-`seen_articles` carries RLS with no policy at all, which denies every role except
-`service_role`.
+**The dashboard is private.** Migration `004` moved `SELECT` on `briefings` and
+`feed_reports` from `anon` to `authenticated`, so the publishable key on its own reads
+*nothing*. Every table request carries the signed-in user's JWT. The sign-in screen is
+the front door; the grant is the lock. A login gate with `anon` still able to `SELECT`
+would be decoration — anyone could read the key out of `docs/script.js` and query
+PostgREST directly.
+
+**RLS is load-bearing, not hygiene.** Database grants and RLS together decide what a
+browser may do. `seen_articles` carries RLS with no policy at all, which denies every
+role except `service_role`.
+
+**Keys at rest.** `app_settings` holds the provider API keys in plaintext, readable by
+any signed-in user and by the service role. That is the accepted trade for making the
+Settings tab the single source of truth, and it is safe here only because `anon` is
+denied outright and this project has exactly one account. Split the table before you
+create a second user who should not hold the billing keys.
 
 ## Layout
 ```
@@ -41,8 +56,9 @@ news-aggregator/
 │   ├── gatekeeper.py             # stage 2: batched relevance scoring + tiering
 │   ├── editor.py                 # stage 3: batched synthesis + URL re-attach
 │   ├── store.py                  # Supabase (PostgREST) client
+│   ├── settings.py               # loads model config from app_settings
 │   ├── dispatch.py               # stage 4: write the day's rows
-│   ├── llm.py                    # shared model client (OpenAI + Gemini, retries, failover)
+│   ├── llm.py                    # shared model client (OpenAI + Anthropic + Gemini)
 │   ├── test_llm_fallback.py      # offline simulation of the failover chain
 │   ├── test_gatekeeper_parsing.py # verdict-shape + empty-briefing guard tests
 │   ├── run.py                    # orchestrator (runs 1→4)
@@ -53,20 +69,39 @@ news-aggregator/
 ```
 
 ## Models
-The pipeline runs on **OpenAI GPT-5.6**, with **Google Gemini** as the last-resort
-fallback. Every model id is provider-prefixed (`openai:` / `gemini:`), so one ordered
-list can cross providers and the whole chain stays a single code path. An unprefixed id
-is inferred from its name (`gpt-*` → OpenAI, `gemini-*` → Gemini).
 
-- `GATEKEEPER_MODEL` / `EDITOR_MODEL` — first choice per stage. Default
-  `openai:gpt-5.6-sol`.
-- `GATEKEEPER_FALLBACK_MODELS` / `EDITOR_FALLBACK_MODELS` — comma-separated, tried in
-  order. Default `openai:gpt-5.6-terra,openai:gpt-5.6-luna,gemini:…`.
+**Choose the model in the dashboard, not in this repo.** Sign in → ⚙ Settings → Models.
+That writes `app_settings`, and `pipeline/settings.py` loads it before the first stage
+runs. The workflow file no longer carries model configuration at all.
 
-**The Gemini entry at the end is load-bearing.** This job runs at 06:17 Pacific with
-nobody awake: if `OPENAI_API_KEY` is unset, the credit runs dry, or a model id turns out
-to be wrong, the chain walks past OpenAI and Gemini still writes the briefing. Keep
-`GEMINI_API_KEY` set and `google-genai` installed even while testing on OpenAI.
+> Changes apply to the **next** scheduled run. Nothing in the dashboard regenerates
+> today's briefing — the pipeline is a cron job, not a live service.
+
+Three providers are supported — **OpenAI**, **Anthropic** and **Google Gemini**. Every
+model id is provider-prefixed (`openai:` / `anthropic:` / `gemini:`), so one ordered list
+can cross providers and the whole chain stays a single code path. An unprefixed id is
+inferred from its name (`gpt-*` → OpenAI, `claude-*` → Anthropic, `gemini-*` → Gemini).
+
+| Setting | Column | Meaning |
+| --- | --- | --- |
+| Gatekeeper / Editor model | `gatekeeper_model`, `editor_model` | first choice per stage |
+| Failover chains | `*_fallback_models` | tried in order when the primary is busy or dry |
+| Provider keys | `openai_api_key`, … | credentials the run uses |
+| Reasoning effort | `openai_reasoning_effort` | `low` / `medium` / `high`, GPT-5.x only |
+
+**Keep a second provider in the chain.** This job runs at 06:17 Pacific with nobody
+awake: if the primary key is missing, the credit runs dry, or a model id turns out to be
+wrong, the chain walks past it and something else still writes the briefing.
+
+**Every field falls back to the environment.** A `NULL` column, an unreadable
+`app_settings`, an unreachable Supabase, or `SETTINGS_FROM_DB=0` all degrade to the
+defaults in `daily.yml` — logged loudly, never fatal. A configuration read must not be
+able to cost you a morning's briefing. The provider secrets stay in Actions as an
+optional backstop for exactly that case; `llm.api_key()` prefers the stored value.
+
+Model ids are verified against `/v1/models` once per run (`LLM_RESOLVE_MODELS=1`), so a
+family name that needs a dated snapshot id is corrected and logged rather than 404-ing
+every call all night. Set it to `0` to use the ids exactly as written.
 
 Model ids are verified against `/v1/models` once per run (`LLM_RESOLVE_MODELS=1`), so a
 family name that needs a dated snapshot id is corrected and logged rather than 404-ing
@@ -181,6 +216,29 @@ the dashboard's model label red with a ⚠ until the next clean run.
   (default `13`s, which is 4.6 RPM — under the free tier's 5 RPM ceiling). `LLM_MIN_INTERVAL`
   sets both at once.
 
+#### A model's cap is not the provider's cap
+**Quotas are metered per model**, so the likeliest overnight failure — one model
+exhausting its own bucket — is answered by the next model on the *same API key*. Put
+two or more models from one provider in the chain and a single-vendor setup still
+survives a cap.
+
+This needs saying because it is a trap: a Gemini per-model quota error repeats OpenAI's
+out-of-credit message word for word — *"You exceeded your current quota, please check
+your plan and billing details."* Matching `billing` classified a throttled Gemini model
+as a dead **account**, marked the whole provider unusable, and skipped every remaining
+Gemini model for the run. `llm.py` now discriminates on the machine-readable parts
+instead (`QuotaFailure` / `quotaMetric` / `rate_limit_exceeded` vs. `insufficient_quota`
+/ `credit balance`), so:
+
+- a **per-model cap** → *busy*, model-scoped: siblings on the same key are still tried
+- a **dead account or bad key** → *unusable*, provider-wide: its other models are skipped,
+  because retrying a key that cannot pay only spends the run's time budget
+- a **per-day cap** → advanced past after **one** request rather than six, since the
+  retry ladder would burn ~2 minutes of a 60-minute budget to earn six more refusals
+
+`test_llm_fallback.py` pins all four behaviours, including a guard against
+over-correcting the other way.
+
 ### Never publish over a good briefing
 `briefings` holds the only copy of a day's briefing and `dispatch.py` upserts by date,
 so an empty result must never be allowed to overwrite it. The pipeline aborts (exit 75, `dispatch` never runs) when:
@@ -225,6 +283,7 @@ Simulate the whole chain without touching the API — no key or network needed:
 cd pipeline && python test_llm_fallback.py        # provider chain + failover
 cd pipeline && python test_gatekeeper_parsing.py  # verdict shapes + the guard
 cd pipeline && python test_supabase_store.py      # storage, paging, prune, RLS-less stub
+cd pipeline && python test_settings.py            # dashboard settings -> model chain
 ```
 
 > Note: Gemini 3.x deprecates the `temperature` / `top_p` / `top_k` sampling params
@@ -232,32 +291,39 @@ cd pipeline && python test_supabase_store.py      # storage, paging, prune, RLS-
 > output plus the schema in each prompt keep responses well-formed.
 
 ## One-time setup
-1. **Create the Supabase project** (or reuse one), then provision the three tables
-   and their RLS policies in the custom `news_aggregator` schema. Add that schema
-   under Project Settings → Data API → Exposed schemas.
-2. **Copy both keys** from Project Settings → API: the `anon` key for the dashboard
-   and the `service_role` key for the pipeline.
-3. **Get an OpenAI API key** (platform.openai.com) — the primary provider — and a
-   **Gemini API key** from Google AI Studio for the fallback (free tier is sufficient).
-4. **Repo secrets** (Settings → Secrets → Actions): `OPENAI_API_KEY`, `GEMINI_API_KEY`,
-   `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`. A missing `OPENAI_API_KEY` does not break
-   the run — it falls through to Gemini and flags the dashboard — but it does mean you
-   are not testing what you think you are testing.
+1. **Create the Supabase project** (or reuse one), then run the migrations in
+   `supabase/migrations/` in order — `001` provisions the tables, `004` adds
+   `app_settings` and closes the dashboard to `anon`. Add the `news_aggregator`
+   schema under Project Settings → Data API → Exposed schemas.
+2. **Copy both keys** from Project Settings → API: the **publishable** key for the
+   dashboard and the `service_role` key for the pipeline.
+3. **Create the dashboard user.** Authentication → Users → *Add user*. This is the
+   only account that can read the briefing after migration `004`. There is no sign-up
+   flow in `docs/` on purpose — the dashboard is for one person.
+4. **Repo secrets** (Settings → Secrets → Actions): `SUPABASE_URL` and
+   `SUPABASE_SERVICE_KEY` are the only *required* ones now.
+   `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` are optional backstops
+   for the morning Supabase is unreachable — normally the keys come from Settings.
 5. **Dashboard config:** in `docs/script.js` set `CONFIG.SUPABASE_URL`,
-   `CONFIG.SUPABASE_ANON_KEY`, and `CONFIG.SUPABASE_SCHEMA`. The **anon** key,
+   `CONFIG.SUPABASE_ANON_KEY`, and `CONFIG.SUPABASE_SCHEMA`. The **publishable** key,
    never `service_role`. The shared production project uses `news_aggregator`.
-6. **Publish the dashboard.** The live site is served from the **separate
+6. **Sign in and pick your models.** Open the dashboard, sign in as the user from
+   step 3, then ⚙ Settings → paste a provider key → *Refresh* to list the models that
+   key can actually see → choose the gatekeeper and editor models → *Save*. *Test
+   provider keys* verifies each one before it has to work unattended.
+7. **Publish the dashboard.** The live site is served from the **separate
    `kalistampai/news` repo**, which holds byte-identical copies of `docs/`
    (`index.html`, `script.js`, `style.css`, `.nojekyll`) — not from this repo's
    `/docs`. A front-end change is not live until it is pushed to **both**.
 
 ## Run it
 - Manual: Actions tab → **daily-briefing** → *Run workflow*.
-- Local: `cd pipeline && pip install -r requirements.txt`, export the env vars
-  (`OPENAI_API_KEY`, `GEMINI_API_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`), then
-  `python run.py`. Intermediate
-  artifacts (`raw_articles.json`, `scored_articles.json`, `briefing.json`) are written
-  in place for inspection.
+- Local: `cd pipeline && pip install -r requirements.txt`, export `SUPABASE_URL` and
+  `SUPABASE_SERVICE_KEY`, then `python run.py` — model choice and provider keys are
+  read from `app_settings`. To run entirely on env vars instead, set
+  `SETTINGS_FROM_DB=0` and export `GATEKEEPER_MODEL` / `EDITOR_MODEL` / the provider
+  key yourself. Intermediate artifacts (`raw_articles.json`, `scored_articles.json`,
+  `briefing.json`) are written in place for inspection.
 
 ## Scheduling
 GitHub Actions cron is **UTC only and does not observe daylight saving.** The default
@@ -268,8 +334,8 @@ the comments in `daily.yml`.
 
 ## Tuning
 - **Volume:** raise/lower the score→tier thresholds in `prompts/gatekeeper.txt`.
-- **Cost / capacity:** swap `GATEKEEPER_MODEL` / `EDITOR_MODEL` and set
-  `EDITOR_FALLBACK_MODELS` via env.
+- **Cost / capacity:** change the gatekeeper and editor models, and their failover
+  chains, in the dashboard's ⚙ Settings tab. No commit, no workflow edit.
 - **Resilience:** the editor synthesizes in batches and, if a batch can't be produced
   even after retries + fallback, emits minimal "degraded" cards so the briefing still
   ships. Set `EDITOR_STRICT=1` to instead abort the whole run on any unrecoverable

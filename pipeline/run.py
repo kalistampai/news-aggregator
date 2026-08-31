@@ -9,11 +9,18 @@ runs, so the published briefing is untouched.
 """
 import sys
 
-import ingest, gatekeeper, editor, dispatch
+import ingest, gatekeeper, editor, dispatch, settings
 from gatekeeper import EmptyScoringError
 from llm import ModelsBusyError
 
 if __name__ == "__main__":
+    # Model choice and provider credentials come from the dashboard's Settings
+    # tab (news_aggregator.app_settings), not from the workflow file. This runs
+    # before any stage so both stages see the same configuration, and it never
+    # raises: an unreadable settings row falls back to the environment rather
+    # than costing the morning its briefing. See settings.py.
+    settings.apply()
+
     try:
         ingest.main()
         gatekeeper.main()

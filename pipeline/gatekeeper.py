@@ -28,8 +28,11 @@ import os
 from pathlib import Path
 
 import llm
-from llm import (GATEKEEPER_MODEL, GATEKEEPER_FALLBACK_MODELS, complete_json,
-                 FatalLlmError, ModelsBusyError)
+# The model ids are read as `llm.X` at each call site, never imported by name.
+# They are overridden at runtime from the dashboard's Settings tab (see
+# settings.apply), and `from llm import GATEKEEPER_MODEL` would bind the
+# pre-override default at import time and silently ignore that.
+from llm import complete_json, FatalLlmError, ModelsBusyError
 
 HERE = Path(__file__).parent
 IN_FILE = HERE / "raw_articles.json"
@@ -55,9 +58,6 @@ PROMOTE_MAX = int(os.environ.get("PROMOTE_MAX", "6"))
 
 class EmptyScoringError(RuntimeError):
     """Scoring produced nothing publishable — abort before overwriting the row."""
-# The chain (primary + ordered fallbacks, provider-prefixed) is defined in llm.py
-# so both stages and the workflow agree on one source of truth.
-FALLBACK_MODELS = GATEKEEPER_FALLBACK_MODELS
 
 
 def _batched(seq, n):
@@ -141,8 +141,9 @@ def main() -> None:
         )
         try:
             raw = complete_json(
-                PROMPT, payload, GATEKEEPER_MODEL, max_tokens=8000,
-                fallback_models=FALLBACK_MODELS, stage="gatekeeper")
+                PROMPT, payload, llm.GATEKEEPER_MODEL, max_tokens=8000,
+                fallback_models=llm.GATEKEEPER_FALLBACK_MODELS,
+                stage="gatekeeper")
             verdicts = _unwrap(raw)
             if not verdicts:
                 # Parsed fine, carried nothing we recognise. Say what came back:
@@ -221,7 +222,7 @@ def main() -> None:
             "publish. The existing briefing is left untouched.")
     if articles and not scored:
         raise EmptyScoringError(
-            f"{len(articles)} articles were sent to {GATEKEEPER_MODEL} and none "
+            f"{len(articles)} articles were sent to {llm.GATEKEEPER_MODEL} and none "
             f"came back scored. The model answered — the verdicts did not match "
             f"the expected shape (see the NO VERDICTS / unknown id lines above). "
             f"Nothing was written; the published briefing is untouched.")
@@ -231,7 +232,7 @@ def main() -> None:
             f"nothing to publish. Keeping the previous briefing rather than "
             f"overwriting it with an empty one. Set EMPTY_OK=1 to publish anyway.")
 
-    report = llm.stage_report("gatekeeper", GATEKEEPER_MODEL)
+    report = llm.stage_report("gatekeeper", llm.GATEKEEPER_MODEL)
     OUT_FILE.write_text(json.dumps(
         {"features": features, "notable": notable,
          "meta": {"gatekeeper_model": report}},

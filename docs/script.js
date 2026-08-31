@@ -43,7 +43,7 @@ const CONFIG = {
    <body data-build>. A mismatch means one of the two files is stale — usually a
    cached script.js on GitHub Pages — which is exactly how a removed control ends
    up referenced by old code and throws "Cannot set properties of null". */
-const BUILD = "2026-08-28b";
+const BUILD = "2026-08-30a";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -346,6 +346,85 @@ function utcTitle(iso) {
   return isNaN(d.getTime()) ? "" : `source timestamp: ${d.toISOString()} (UTC)`;
 }
 
+/* ==================================================================== auth ==
+   Supabase Auth against the shared project. Migration 004 moved SELECT on
+   briefings/feed_reports from `anon` to `authenticated`, so the session is not
+   decoration: without a user JWT every table read comes back empty-handed.
+
+   The session lives in localStorage under supabase-js's own key and is
+   refreshed automatically, so a returning visitor lands straight on the board. */
+let sbClient = null;
+let SESSION = null;
+
+function supa() {
+  if (sbClient) return sbClient;
+  if (!window.supabase || !window.supabase.createClient) return null;
+  sbClient = window.supabase.createClient(
+    CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY,
+    {
+      db: { schema: CONFIG.SUPABASE_SCHEMA },
+      auth: { persistSession: true, autoRefreshToken: true },
+    });
+  return sbClient;
+}
+
+/* The header pair every PostgREST call needs. Falls back to the publishable key
+   as the bearer when signed out — that request is *meant* to return nothing, and
+   an absent Authorization header would be a 401 that reads like a broken
+   deployment rather than "you are not signed in". */
+function authHeaders() {
+  const token = SESSION?.access_token || CONFIG.SUPABASE_ANON_KEY;
+  return {
+    apikey: CONFIG.SUPABASE_ANON_KEY,
+    Authorization: `Bearer ${token}`,
+    "Accept-Profile": CONFIG.SUPABASE_SCHEMA,
+    "Content-Profile": CONFIG.SUPABASE_SCHEMA,
+  };
+}
+
+async function loadSession() {
+  const client = supa();
+  if (!client) throw new Error(
+    "The Supabase client library did not load, so signing in is impossible. " +
+    "Check the CDN <script> tag in index.html.");
+  const { data, error } = await client.auth.getSession();
+  if (error) throw new Error(error.message);
+  SESSION = data?.session || null;
+  return SESSION;
+}
+
+async function signIn(email, password) {
+  const client = supa();
+  if (!client) return { ok: false, error: "Supabase client failed to load." };
+  const { data, error } = await client.auth.signInWithPassword({ email, password });
+  if (error) return { ok: false, error: error.message };
+  SESSION = data.session;
+  return { ok: true };
+}
+
+async function signOut() {
+  const client = supa();
+  if (client) await client.auth.signOut();
+  SESSION = null;
+  location.reload();
+}
+
+function showGate(message) {
+  document.body.classList.add("is-locked");
+  setProp("#authScreen", "hidden", false);
+  if (message) {
+    setProp("#authError", "textContent", message);
+    setProp("#authError", "hidden", false);
+  }
+  const email = el("#authEmail");
+  if (email && email.focus) setTimeout(() => email.focus(), 40);
+}
+
+function hideGate() {
+  document.body.classList.remove("is-locked");
+  setProp("#authScreen", "hidden", true);
+}
+
 /* ------------------------------ data loading ----------------------------- */
 /* Two REST reads pull every archived day at once — briefings and feed reports —
    so filtering, collapsing, ranking, diffing and day-flipping all happen locally
@@ -355,12 +434,13 @@ async function fetchTable(table) {
   const url = `${CONFIG.SUPABASE_URL}/rest/v1/${table}` +
               `?select=date,payload&order=date.desc&limit=${CONFIG.ARCHIVE_DAYS}`;
   const r = await fetch(url, {
-    headers: {
-      apikey: CONFIG.SUPABASE_ANON_KEY,
-      Authorization: `Bearer ${CONFIG.SUPABASE_ANON_KEY}`,
-      "Accept-Profile": CONFIG.SUPABASE_SCHEMA,
-      Accept: "application/json",
-    },
+    /* `apikey` stays the publishable key — it identifies the project. The
+       Authorization bearer is now the USER's JWT, not that same key: since
+       migration 004 the anon role has no SELECT on these tables, so a request
+       carrying the publishable key in both slots reads nothing. That is the
+       intended behaviour, and it is what makes the sign-in screen real rather
+       than cosmetic. */
+    headers: { ...authHeaders(), Accept: "application/json" },
     cache: "no-store",
   });
   if (r.ok) return r.json();
@@ -374,8 +454,8 @@ async function fetchTable(table) {
   try { detail = (await r.json()).message || ""; } catch (_) { /* not JSON */ }
   const because = detail ? ` — ${detail}` : "";
   if (r.status === 401 || r.status === 403) {
-    throw new Error(`Supabase refused the read (${r.status}). Check ` +
-      `SUPABASE_ANON_KEY in script.js.${because}`);
+    throw new Error(`Supabase refused the read (${r.status}). The session may ` +
+      `have expired — sign out and back in.${because}`);
   }
   if (r.status === 404) {
     throw new Error(`Supabase cannot expose "${CONFIG.SUPABASE_SCHEMA}.${table}" ` +
@@ -1405,9 +1485,302 @@ function checkAssetVersions() {
   document.body.insertBefore(bar, document.body.firstChild);
 }
 
+/* ================================================================ settings ==
+   Reads and writes news_aggregator.app_settings — the row the pipeline loads at
+   the start of every run (pipeline/settings.py). This is now the only place
+   model choice lives; .github/workflows/daily.yml no longer carries it.
+
+   NOTHING HERE RUNS A MODEL. The pipeline is a scheduled job, so a change saved
+   at noon takes effect at the next 06:17 run. The modal says so out loud,
+   because "I changed the model and the briefing looks identical" is otherwise
+   the obvious and wrong conclusion to draw. */
+const PROVIDERS = {
+  openai: {
+    label: "OpenAI",
+    keyInput: "#keyOpenai",
+    dot: "#dotOpenai",
+    column: "openai_api_key",
+    async discover(key) {
+      const r = await fetch("https://api.openai.com/v1/models", {
+        headers: { Authorization: `Bearer ${key}` },
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
+      return (j.data || []).map((m) => m.id);
+    },
+  },
+  anthropic: {
+    label: "Anthropic",
+    keyInput: "#keyAnthropic",
+    dot: "#dotAnthropic",
+    column: "anthropic_api_key",
+    async discover(key) {
+      const r = await fetch("https://api.anthropic.com/v1/models", {
+        headers: {
+          "x-api-key": key,
+          "anthropic-version": "2023-06-01",
+          // Without this the browser is refused at CORS before the request
+          // is ever sent — it is not optional for a page-side call.
+          "anthropic-dangerous-direct-browser-access": "true",
+        },
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
+      return (j.data || []).map((m) => m.id);
+    },
+  },
+  gemini: {
+    label: "Gemini",
+    keyInput: "#keyGemini",
+    dot: "#dotGemini",
+    column: "gemini_api_key",
+    async discover(key) {
+      const r = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=" +
+        encodeURIComponent(key));
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
+      // Gemini returns "models/gemini-…"; the bare id is what the API wants back.
+      return (j.models || []).map((m) => (m.name || "").replace(/^models\//, ""));
+    },
+  },
+};
+
+/* DENY-list, not an allow-list. An allow-list keyed to today's naming
+   (/^gpt-|^claude-/) would silently hide any model released under an unfamiliar
+   name, which defeats the point of asking the API what exists. Tokens match as
+   whole segments so "ada" cannot hide "adaptive". */
+const NON_CHAT = new RegExp(
+  "(^|[-_./])(embed|embedding|embeddings|gecko|tts|stt|whisper|audio|speech|" +
+  "voice|transcribe|translate|image|images|vision|dall|dalle|imagen|veo|" +
+  "moderation|moderations|guard|safety|realtime|search|rerank|similarity|" +
+  "edit|edits|instruct|codex|ada|babbage|curie|davinci|aqa|gemma|learnlm)" +
+  "([-_./]|$)", "i");
+
+let SETTINGS = null;             // the row as last read/saved
+let DISCOVERED = {};             // provider -> [model id], this session only
+
+const settingsUrl = () => `${CONFIG.SUPABASE_URL}/rest/v1/app_settings`;
+
+async function loadSettings() {
+  const r = await fetch(`${settingsUrl()}?id=eq.1&select=*`, {
+    headers: { ...authHeaders(), Accept: "application/json" },
+    cache: "no-store",
+  });
+  if (!r.ok) {
+    let detail = "";
+    try { detail = (await r.json()).message || ""; } catch (_) { /* not JSON */ }
+    if (r.status === 404) {
+      throw new Error("app_settings does not exist — run migration " +
+                      "004_app_settings_and_auth.sql." + (detail ? ` ${detail}` : ""));
+    }
+    throw new Error(`Could not read settings (${r.status})` +
+                    (detail ? ` — ${detail}` : "") + ".");
+  }
+  const rows = await r.json();
+  SETTINGS = rows[0] || {};
+  return SETTINGS;
+}
+
+function chainToArray(text) {
+  return String(text || "").split(",").map((s) => s.trim()).filter(Boolean);
+}
+
+async function saveSettings() {
+  const body = [{
+    id: 1,
+    gatekeeper_model: el("#setGatekeeper").value || null,
+    editor_model: el("#setEditor").value || null,
+    gatekeeper_fallback_models: chainToArray(el("#setGatekeeperChain").value),
+    editor_fallback_models: chainToArray(el("#setEditorChain").value),
+    openai_api_key: el("#keyOpenai").value.trim() || null,
+    anthropic_api_key: el("#keyAnthropic").value.trim() || null,
+    gemini_api_key: el("#keyGemini").value.trim() || null,
+    openai_reasoning_effort: el("#setEffort").value || "low",
+    updated_at: new Date().toISOString(),
+    updated_by: SESSION?.user?.id || null,
+  }];
+  const r = await fetch(settingsUrl(), {
+    method: "POST",
+    headers: {
+      ...authHeaders(),
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates,return=representation",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    let detail = "";
+    try { detail = (await r.json()).message || ""; } catch (_) { /* not JSON */ }
+    throw new Error(`Save failed (${r.status})${detail ? ` — ${detail}` : ""}.`);
+  }
+  const rows = await r.json().catch(() => []);
+  if (rows[0]) SETTINGS = rows[0];
+}
+
+function keyFor(provider) {
+  const input = $(PROVIDERS[provider].keyInput);
+  return (input?.value || "").trim();
+}
+
+function syncKeyDots() {
+  for (const [id, p] of Object.entries(PROVIDERS)) {
+    const dot = $(p.dot);
+    if (dot) dot.dataset.on = keyFor(id) ? "yes" : "no";
+  }
+}
+
+/* Populate one stage's <select>. The stored value is always present as an
+   option even when discovery never ran or returned something else — otherwise
+   opening Settings and pressing Save would silently rewrite the model to
+   whatever happened to be first in the list. */
+function fillModelSelect(sel, current, provider) {
+  const node = $(sel);
+  if (!node) return;
+  const ids = (DISCOVERED[provider] || []).filter((id) => id && !NON_CHAT.test(id));
+  const values = ids.map((id) => `${provider}:${id}`);
+  if (current && !values.includes(current)) values.unshift(current);
+  node.innerHTML = "";
+  if (!values.length) {
+    node.appendChild(new Option("— enter a key and press Refresh —", ""));
+  }
+  for (const v of values) node.appendChild(new Option(v, v));
+  node.value = current || values[0] || "";
+}
+
+function fillSettings() {
+  const s = SETTINGS || {};
+  setProp("#accountEmail", "textContent", SESSION?.user?.email || "—");
+  setProp("#keyOpenai", "value", s.openai_api_key || "");
+  setProp("#keyAnthropic", "value", s.anthropic_api_key || "");
+  setProp("#keyGemini", "value", s.gemini_api_key || "");
+  setProp("#setGatekeeperChain", "value",
+          (s.gatekeeper_fallback_models || []).join(", "));
+  setProp("#setEditorChain", "value",
+          (s.editor_fallback_models || []).join(", "));
+  setProp("#setEffort", "value", s.openai_reasoning_effort || "low");
+
+  // Default the provider picker to whatever the gatekeeper is already using,
+  // so Refresh lists the models you are most likely to be changing.
+  const provider = (s.gatekeeper_model || "").split(":")[0];
+  setProp("#setProvider", "value", PROVIDERS[provider] ? provider : "openai");
+
+  const active = el("#setProvider").value;
+  fillModelSelect("#setGatekeeper", s.gatekeeper_model || "", active);
+  fillModelSelect("#setEditor", s.editor_model || "", active);
+  syncKeyDots();
+}
+
+async function refreshModels() {
+  const provider = el("#setProvider").value;
+  const key = keyFor(provider);
+  const hint = el("#discoveryHint");
+  if (!key) {
+    hint.textContent = `No ${PROVIDERS[provider].label} key entered above yet.`;
+    return;
+  }
+  hint.textContent = "Listing models…";
+  try {
+    DISCOVERED[provider] = await PROVIDERS[provider].discover(key);
+    const usable = DISCOVERED[provider].filter((id) => !NON_CHAT.test(id));
+    hint.textContent = `${usable.length} usable models for this ` +
+                       `${PROVIDERS[provider].label} key.`;
+    fillModelSelect("#setGatekeeper", el("#setGatekeeper").value, provider);
+    fillModelSelect("#setEditor", el("#setEditor").value, provider);
+  } catch (e) {
+    hint.textContent = `Could not list models — ${e.message}`;
+  }
+}
+
+/* A key that is present but dead is the failure that is worst to discover at
+   06:17, so it is checkable here, on demand, before it costs a briefing. */
+async function testKeys() {
+  const out = el("#testResults");
+  out.innerHTML = "";
+  for (const [id, p] of Object.entries(PROVIDERS)) {
+    const key = keyFor(id);
+    const line = document.createElement("div");
+    line.className = "set__result";
+    if (!key) {
+      line.dataset.state = "skip";
+      line.textContent = `${p.label}: no key set`;
+      out.appendChild(line);
+      continue;
+    }
+    line.dataset.state = "wait";
+    line.textContent = `${p.label}: checking…`;
+    out.appendChild(line);
+    try {
+      const ids = await p.discover(key);
+      line.dataset.state = "ok";
+      line.textContent = `${p.label}: ok — ${ids.length} models visible`;
+    } catch (e) {
+      line.dataset.state = "bad";
+      line.textContent = `${p.label}: ${e.message}`;
+    }
+  }
+}
+
+function openSettings() {
+  setProp("#settingsModal", "hidden", false);
+  setProp("#saveState", "textContent", "");
+  loadSettings()
+    .then(fillSettings)
+    .catch((e) => setProp("#saveState", "textContent", e.message));
+}
+
+function closeSettings() { setProp("#settingsModal", "hidden", true); }
+
+function wireSettings() {
+  on("#settingsBtn", "click", openSettings);
+  on("#signOutBtn", "click", signOut);
+  $$("[data-close-settings]").forEach((n) =>
+    n.addEventListener("click", closeSettings));
+  on("#refreshModels", "click", refreshModels);
+  on("#testKeys", "click", testKeys);
+
+  on("#setProvider", "change", (e) => {
+    const provider = e.target.value;
+    fillModelSelect("#setGatekeeper", el("#setGatekeeper").value, provider);
+    fillModelSelect("#setEditor", el("#setEditor").value, provider);
+    el("#discoveryHint").textContent = DISCOVERED[provider]
+      ? `${DISCOVERED[provider].length} models cached for this provider.`
+      : `Enter the ${PROVIDERS[provider].label} key above, then Refresh.`;
+  });
+
+  $$("[data-reveal]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const input = document.getElementById(btn.dataset.reveal);
+      if (input) input.type = input.type === "password" ? "text" : "password";
+    });
+  });
+
+  ["#keyOpenai", "#keyAnthropic", "#keyGemini"].forEach((sel) =>
+    on(sel, "input", syncKeyDots));
+
+  on("#saveSettings", "click", async () => {
+    const state = el("#saveState");
+    state.textContent = "Saving…";
+    try {
+      await saveSettings();
+      state.textContent = "Saved — applies at the next 06:17 run.";
+    } catch (e) {
+      state.textContent = e.message;
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeSettings();
+  });
+}
+
 /* --------------------------------- boot ---------------------------------- */
-(async function boot() {
-  checkAssetVersions();
+/* Everything past the sign-in gate. Split out of boot() so the auth check can
+   decide whether to run it at all: with `anon` revoked in migration 004, a
+   signed-out visitor would otherwise watch buildStore() return zero rows and
+   get told "the pipeline has not run yet" — a confident and completely wrong
+   diagnosis of what is really a missing session. */
+async function startApp() {
   loadModelLabel();                     // last known model, for the offline path
   setModelBusy("fetching briefing…");   // idle state is set by render()/renderError()
 
@@ -1612,4 +1985,57 @@ function checkAssetVersions() {
   } catch (e) {
     renderError(e.message);
   }
+}
+
+/* The gate. Wiring comes first and unconditionally: if the session check throws,
+   the sign-in form still has to work, and that is exactly the moment somebody
+   needs it. */
+(async function boot() {
+  checkAssetVersions();
+
+  // The page now starts blank (body.is-locked, gate hidden), so an exception
+  // before the showGate/hideGate decision would leave a permanently empty
+  // screen with no way to sign in. Same reasoning as the UI-wiring try/catch
+  // in startApp(): a broken control must never be able to hide the content.
+  try {
+    wireAuth();
+    wireSettings();
+  } catch (wiringErr) {
+    console.error("[DISPATCH] auth/settings wiring failed:", wiringErr);
+  }
+
+  let session = null;
+  try {
+    session = await loadSession();
+  } catch (e) {
+    showGate(e.message);
+    return;
+  }
+  if (!session) { showGate(); return; }
+
+  hideGate();
+  await startApp();
 })();
+
+function wireAuth() {
+  on("#authForm", "submit", async (e) => {
+    e.preventDefault();
+    const button = el("#authSubmit");
+    button.disabled = true;
+    button.textContent = "Authenticating…";
+    setProp("#authError", "hidden", true);
+
+    const result = await signIn(el("#authEmail").value.trim(),
+                                el("#authPassword").value);
+    if (result.ok) {
+      setProp("#authPassword", "value", "");
+      hideGate();
+      await startApp();
+      return;
+    }
+    setProp("#authError", "textContent", result.error);
+    setProp("#authError", "hidden", false);
+    button.disabled = false;
+    button.textContent = "Authenticate";
+  });
+}

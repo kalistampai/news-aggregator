@@ -612,6 +612,96 @@ def test_a_response_without_usage_reports_none_not_zero():
 
 
 # ---- runner -----------------------------------------------------------------
+# ---- 5. same-provider failover: one model's cap is not the provider's -------
+# Quotas are metered PER MODEL. The single most likely overnight failure is one
+# model exhausting its own bucket, and the fix that costs nothing is the next
+# model on the SAME key. These cases exist because that used not to happen: a
+# Gemini quota error repeats OpenAI's out-of-credit prose word for word ("check
+# your plan and billing details"), the substring "billing" marked the whole
+# provider dead, and every remaining Gemini model was skipped for the run.
+GEM_MAIN = "gemini:gemini-3.5-flash"
+
+_QUOTA_DETAILS = (
+    "[{'@type': 'type.googleapis.com/google.rpc.QuotaFailure', 'violations': "
+    "[{'quotaMetric': 'generativelanguage.googleapis.com/"
+    "generate_content_free_tier_requests', 'quotaId': '%s'}]}]")
+
+
+def gemini_quota(per="Day"):
+    """A real-shaped Gemini 429 for a per-model free-tier cap."""
+    return GeminiError(
+        429, "RESOURCE_EXHAUSTED",
+        "You exceeded your current quota, please check your plan and billing "
+        "details. For more information on this error, head on to: "
+        "https://ai.google.dev/gemini-api/docs/rate-limits. Details: "
+        + _QUOTA_DETAILS % f"GenerateRequestsPer{per}PerProjectPerModel-FreeTier")
+
+
+def test_gemini_model_quota_falls_over_to_the_next_gemini_model():
+    """THE headline case: same key, next model, briefing still ships."""
+    out, log, oa, gm = run(
+        model=GEM_MAIN, fallbacks=(FLOOR,),
+        gemini_script={bare(GEM_MAIN): gemini_quota(), bare(FLOOR): GOOD_JSON})
+    assert out == WANT, f"no briefing was produced: {out!r}"
+    assert bare(FLOOR) in gm.calls, gm.calls
+    assert not oa.calls, "left the provider entirely when a sibling could answer"
+    assert llm.stage_report(GEM_MAIN)["effective"] == FLOOR
+
+
+def test_a_model_quota_does_not_kill_the_provider():
+    err = gemini_quota()
+    assert llm._provider_wide(err) is False, \
+        "a per-model cap was treated as a dead account — the rest of the " \
+        "provider's chain would be skipped"
+    assert llm.classify(err) == llm.BUSY, llm.classify(err)
+
+
+def test_daily_quota_is_not_retried():
+    """A cap that resets tomorrow must cost ONE request, not six.
+
+    The retry ladder would burn ~2 minutes of a 60-minute budget to collect six
+    more refusals it already knows are coming.
+    """
+    out, log, oa, gm = run(
+        model=GEM_MAIN, fallbacks=(FLOOR,),
+        gemini_script={bare(GEM_MAIN): gemini_quota("Day"), bare(FLOOR): GOOD_JSON})
+    assert out == WANT, out
+    assert gm.calls.count(bare(GEM_MAIN)) == 1, \
+        f"retried a daily cap {gm.calls.count(bare(GEM_MAIN))} times: {gm.calls}"
+    assert "daily quota" in log, log
+
+
+def test_per_minute_quota_is_retried_before_moving_on():
+    """The mirror image: a per-minute cap DOES clear, so waiting is correct."""
+    out, log, oa, gm = run(
+        model=GEM_MAIN, fallbacks=(FLOOR,),
+        gemini_script={bare(GEM_MAIN): gemini_quota("Minute"),
+                       bare(FLOOR): GOOD_JSON})
+    assert out == WANT, out
+    assert gm.calls.count(bare(GEM_MAIN)) == llm.MAX_RETRIES, gm.calls
+
+
+def test_out_of_credit_still_kills_the_whole_provider():
+    """Guard against over-correcting: a dry ACCOUNT must still skip its models.
+
+    Retrying sibling models on a key that cannot pay just spends the run's time
+    budget collecting the same refusal.
+    """
+    err = OpenAIError(429, "You exceeded your current quota, please check your "
+                           "plan and billing details.", "insufficient_quota")
+    assert llm._provider_wide(err) is True, \
+        "an unpayable account was treated as a per-model cap"
+    out, log, oa, gm = run(
+        openai_script={bare(SOL): err}, gemini_script={bare(FLOOR): GOOD_JSON})
+    assert out == WANT, out
+    assert oa.calls == [bare(SOL)], f"tried more OpenAI models on a dry key: {oa.calls}"
+
+
+def test_a_bad_key_still_kills_the_whole_provider():
+    err = OpenAIError(401, "Incorrect API key provided.")
+    assert llm._provider_wide(err) is True, err
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = []

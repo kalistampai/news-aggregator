@@ -1,5 +1,5 @@
 """
-Shared LLM client — OpenAI primary, Google Gemini as the last-resort fallback.
+Shared LLM client — OpenAI, Anthropic and Google Gemini behind one call path.
 
 Exposes exactly the interface the pipeline expects:
   - GATEKEEPER_MODEL / EDITOR_MODEL             (primary model per stage)
@@ -8,12 +8,24 @@ Exposes exactly the interface the pipeline expects:
         -> parsed JSON
   - stage_report(requested_model)   -> which model ACTUALLY answered (display)
   - alerts()                        -> problems that need a human, if any
+  - apply_settings(overrides)       -> override the chain + keys from Supabase
+  - api_key(provider)               -> credential, settings first then env
 
-MODEL IDS CARRY THEIR PROVIDER: "openai:gpt-5.6-sol", "gemini:gemini-3.5-flash".
-An unprefixed id is inferred from its name (gpt-*/o*-> openai, gemini-* -> gemini)
-and otherwise falls back to LLM_DEFAULT_PROVIDER. Because the provider travels
-with the id, the fallback chain spans providers for free: the editor can try
-three OpenAI models and then Gemini, using one ordered list and one code path.
+WHERE THE CONFIGURATION COMES FROM
+The module-level constants below are DEFAULTS, read from the environment at
+import. The real values normally arrive at runtime from the dashboard's Settings
+tab, which writes `news_aggregator.app_settings`; settings.apply() reads that row
+and calls apply_settings() before any stage runs. That is why the stages read
+`llm.GATEKEEPER_MODEL` at call time instead of importing the name — a
+`from llm import GATEKEEPER_MODEL` would freeze the pre-override default and
+silently ignore whatever the dashboard was told.
+
+MODEL IDS CARRY THEIR PROVIDER: "openai:gpt-5.6-sol", "anthropic:claude-sonnet-5",
+"gemini:gemini-3.5-flash". An unprefixed id is inferred from its name (gpt-*/o* ->
+openai, claude-* -> anthropic, gemini-* -> gemini) and otherwise falls back to
+LLM_DEFAULT_PROVIDER. Because the provider travels with the id, the fallback
+chain spans providers for free: the editor can try three OpenAI models and then
+Gemini, using one ordered list and one code path.
 
 THIS PIPELINE RUNS UNATTENDED AT 06:17 PACIFIC. Nobody is awake to restart it, so
 the ordering principle throughout is: keep going if anything can still answer,
@@ -83,9 +95,31 @@ import threading
 import time
 
 # ---- providers ---------------------------------------------------------------
-OPENAI, GEMINI = "openai", "gemini"
-PROVIDERS = (OPENAI, GEMINI)
+OPENAI, ANTHROPIC, GEMINI = "openai", "anthropic", "gemini"
+PROVIDERS = (OPENAI, ANTHROPIC, GEMINI)
 LLM_DEFAULT_PROVIDER = os.environ.get("LLM_DEFAULT_PROVIDER", OPENAI).strip().lower()
+
+# Credentials resolve through api_key(), NOT os.environ directly, so the
+# dashboard's Settings tab can supply them (settings.apply -> apply_settings)
+# without this module having to care where they came from. Values set here take
+# precedence over the environment; the environment remains the fallback so a run
+# with SETTINGS_FROM_DB=0, or one predating migration 004, behaves exactly as
+# before. Deliberately NOT written into os.environ: that would leak the key into
+# every subprocess and any library that dumps the environment on error.
+_ENV_KEYS = {
+    OPENAI: "OPENAI_API_KEY",
+    ANTHROPIC: "ANTHROPIC_API_KEY",
+    GEMINI: "GEMINI_API_KEY",
+}
+_API_KEYS: dict[str, str] = {}
+
+
+def api_key(provider: str) -> str:
+    """The credential for `provider`: settings first, then the environment."""
+    override = _API_KEYS.get(provider, "").strip()
+    if override:
+        return override
+    return os.environ.get(_ENV_KEYS.get(provider, ""), "").strip()
 
 
 def _split(csv: str) -> list[str]:
@@ -93,15 +127,23 @@ def _split(csv: str) -> list[str]:
 
 
 # Model chain. "Best first, then the next one that answers" — the order below is
-# the priority order; every entry is overridable by env.
+# the priority order; every entry is overridable by env or from the dashboard.
 #
-# The Gemini entry is the floor, not a peer: it is there so a total OpenAI
-# outage (or an unset OPENAI_API_KEY) still produces a briefing at 06:17.
+# DEPTH WITHIN A PROVIDER IS THE POINT, not just breadth across providers.
+# Quotas are metered PER MODEL, so the single most likely failure — one model
+# hitting its own cap — is answered by the next model on the SAME key, without
+# needing a second vendor to be configured at all. Two Gemini entries mean a
+# Gemini-only setup still has somewhere to go; the cross-provider hops after
+# them cover the rarer case of an outage or a dead account.
 _OPENAI_BEST = os.environ.get("OPENAI_BEST_MODEL", "gpt-5.6-sol")
 _OPENAI_NEXT = os.environ.get("OPENAI_NEXT_MODEL", "gpt-5.6-terra")
 _OPENAI_LAST = os.environ.get("OPENAI_LAST_MODEL", "gpt-5.6-luna")
+_GEMINI_MAIN = os.environ.get("GEMINI_MAIN_MODEL", "gemini-3.5-flash")
 _GEMINI_FLOOR = os.environ.get("GEMINI_FLOOR_MODEL", "gemini-3.1-flash-lite")
-_DEFAULT_CHAIN = f"{OPENAI}:{_OPENAI_NEXT},{OPENAI}:{_OPENAI_LAST},{GEMINI}:{_GEMINI_FLOOR}"
+_DEFAULT_CHAIN = ",".join((
+    f"{OPENAI}:{_OPENAI_NEXT}", f"{OPENAI}:{_OPENAI_LAST}",
+    f"{GEMINI}:{_GEMINI_MAIN}", f"{GEMINI}:{_GEMINI_FLOOR}",
+))
 
 GATEKEEPER_MODEL = os.environ.get("GATEKEEPER_MODEL", f"{OPENAI}:{_OPENAI_BEST}")
 EDITOR_MODEL = os.environ.get("EDITOR_MODEL", f"{OPENAI}:{_OPENAI_BEST}")
@@ -146,9 +188,43 @@ def split_model(model_id: str) -> tuple[str, str]:
     low = raw.lower()
     if low.startswith(("gpt", "o1", "o3", "o4", "chatgpt")):
         return OPENAI, raw
+    if low.startswith("claude"):
+        return ANTHROPIC, raw
     if low.startswith(("gemini", "models/gemini")):
         return GEMINI, raw
     return LLM_DEFAULT_PROVIDER, raw
+
+
+def apply_settings(overrides: dict) -> None:
+    """Override the module's model chain and credentials from stored settings.
+
+    Called once, by settings.apply(), before any stage runs. Only keys present
+    in `overrides` are touched, so a partially-filled settings row leaves the
+    rest of the environment-derived configuration intact.
+
+    These are module-level rebinds, which is why gatekeeper.py and editor.py
+    read `llm.GATEKEEPER_MODEL` at call time rather than importing the name:
+    a `from llm import GATEKEEPER_MODEL` elsewhere would freeze the pre-override
+    value and quietly ignore everything the dashboard was told to do.
+    """
+    global GATEKEEPER_MODEL, EDITOR_MODEL
+    global GATEKEEPER_FALLBACK_MODELS, EDITOR_FALLBACK_MODELS
+    global OPENAI_REASONING_EFFORT
+
+    if overrides.get("gatekeeper_model"):
+        GATEKEEPER_MODEL = overrides["gatekeeper_model"]
+    if overrides.get("editor_model"):
+        EDITOR_MODEL = overrides["editor_model"]
+    if overrides.get("gatekeeper_fallback_models"):
+        GATEKEEPER_FALLBACK_MODELS = list(overrides["gatekeeper_fallback_models"])
+    if overrides.get("editor_fallback_models"):
+        EDITOR_FALLBACK_MODELS = list(overrides["editor_fallback_models"])
+    if overrides.get("openai_reasoning_effort"):
+        OPENAI_REASONING_EFFORT = overrides["openai_reasoning_effort"]
+
+    for provider, key in (overrides.get("api_keys") or {}).items():
+        if provider in PROVIDERS and str(key).strip():
+            _API_KEYS[provider] = str(key).strip()
 
 
 # ---- errors -----------------------------------------------------------------
@@ -190,7 +266,7 @@ class ProviderUnavailable(LlmError):
 # An explicit LLM_MIN_INTERVAL applies to both providers; the per-provider vars
 # override it. The Gemini default stays at the free-tier-safe 13s so the
 # last-resort fallback cannot 429 itself the moment it is called.
-_INTERVAL_DEFAULTS = {OPENAI: "1", GEMINI: "13"}
+_INTERVAL_DEFAULTS = {OPENAI: "1", ANTHROPIC: "1", GEMINI: "13"}
 LLM_MIN_INTERVAL = os.environ.get("LLM_MIN_INTERVAL")
 _INTERVALS = {
     p: float(os.environ.get(f"{p.upper()}_MIN_INTERVAL",
@@ -414,6 +490,7 @@ def reset_state() -> None:
     """Clear routing + display state. For tests; a fresh process starts clean."""
     global _AVAILABLE_IDS
     _AVAILABLE_IDS = None
+    _API_KEYS.clear()          # settings-supplied credentials are per-run too
     with _route_lock:
         _BUSY_UNTIL.clear()
         _DEAD_MODELS.clear()
@@ -456,6 +533,58 @@ _UNUSABLE_MARKERS = (
     "billing", "credit balance", "payment", "not installed",
 )
 _FATAL_MARKERS = ("invalid argument", "invalid_request_error", "unknown parameter")
+
+# ---- rate limits vs. dead accounts ------------------------------------------
+# THE DISTINCTION THIS SECTION EXISTS FOR, and why it is not a one-line check:
+#
+# Gemini's per-model quota error and OpenAI's out-of-credit error carry the SAME
+# English prose — "You exceeded your current quota, please check your plan and
+# billing details." Matching "billing" therefore used to classify a Gemini model
+# running out of its own free-tier requests as a dead ACCOUNT, which marked the
+# whole provider unusable and skipped every remaining Gemini model in the chain.
+# Each Gemini model carries its own separate free-tier bucket, so those siblings
+# would have answered. That single substring was the difference between a
+# briefing and an empty morning.
+#
+# The reliable discriminators are the machine-readable parts, not the prose:
+#   - a per-model/per-minute quota names its metric (Google's QuotaFailure
+#     details, or an OpenAI rate_limit_exceeded code)
+#   - a dead account names insufficient_quota / a credit balance
+_RATE_LIMIT_MARKERS = (
+    "quotafailure", "quotametric", "quota_metric", "quotaid", "quota_id",
+    "rate limit", "rate-limit", "rate_limit", "ratelimit",
+    "requests per minute", "requests per day", "tokens per minute",
+    "per minute", "per day", "perday", "perminute", "permodel",
+    "resource has been exhausted", "resource_exhausted", "check quota",
+    "too many requests",
+)
+# Unambiguous "this account cannot pay", which DOES kill every model on the key.
+_ACCOUNT_DEAD_MARKERS = (
+    "insufficient_quota", "insufficient quota", "credit balance",
+    "billing not active", "account is not active", "payment required",
+    "spending limit", "hard limit",
+)
+# A quota that resets tomorrow, not in a minute. Retrying it is pure waste: the
+# backoff burns ~2 minutes of a 60-minute budget to earn six more refusals.
+_DAILY_LIMIT_MARKERS = (
+    "per day", "perday", "requestsperday", "requests per day",
+    "daily limit", "per-day", "quota exceeded for quota metric",
+)
+
+
+def _is_rate_limit(exc: Exception) -> bool:
+    """True when the failure is a throughput cap, not a dead account."""
+    return any(s in str(exc).lower() for s in _RATE_LIMIT_MARKERS)
+
+
+def _is_daily_limit(exc: Exception) -> bool:
+    """True when the cap resets on a day boundary — advance, do not retry."""
+    msg = str(exc).lower()
+    return (_is_rate_limit(exc)
+            and any(s in msg for s in _DAILY_LIMIT_MARKERS)
+            # "per minute" and "per day" can both appear in one violations list;
+            # only treat it as daily when nothing says the limit is per-minute.
+            and "per minute" not in msg and "perminute" not in msg)
 
 
 def _status_code(exc: Exception) -> int | None:
@@ -500,11 +629,14 @@ def classify(exc: Exception) -> str:
     msg = str(exc).lower()
     code = _status_code(exc)
 
-    # An OpenAI 429 is either "slow down" (recovers) or "you are out of credit"
-    # (never recovers). Only the message distinguishes them.
+    # A 429 is either "slow down" (recovers, and says nothing about the account)
+    # or "you are out of credit" (never recovers). ORDER MATTERS HERE: the
+    # rate-limit test runs FIRST because a Gemini per-model quota error repeats
+    # OpenAI's out-of-credit prose verbatim, so the account check would claim it.
     if code == 429 or "resource_exhausted" in _status_name(exc):
-        if any(s in msg for s in ("insufficient_quota", "insufficient quota",
-                                  "billing", "credit balance", "payment")):
+        if _is_rate_limit(exc):
+            return BUSY if RETRY_429 else FATAL
+        if any(s in msg for s in _ACCOUNT_DEAD_MARKERS):
             return UNUSABLE
         return BUSY if RETRY_429 else FATAL
     if code in _BUSY_STATUS:
@@ -530,14 +662,24 @@ def classify(exc: Exception) -> str:
 
 
 def _provider_wide(exc: Exception) -> bool:
-    """True when the cause kills every model from that provider, not just one."""
+    """True when the cause kills every model from that provider, not just one.
+
+    A missing key or a dead account takes the whole provider with it. A THROUGHPUT
+    CAP DOES NOT: quotas are metered per model, so the next Gemini model on the
+    same key has its own bucket and is very likely to answer. Returning True here
+    for a rate limit is what used to skip the entire rest of a provider's chain.
+    """
+    if _is_rate_limit(exc):
+        return False
     msg = str(exc).lower()
     if _status_code(exc) in (401, 403) or isinstance(exc, ProviderUnavailable):
         return True
+    # NOTE: bare "billing" / "payment" are deliberately NOT here — they appear in
+    # the advisory text of ordinary rate-limit errors. The guard above catches
+    # most of those; these markers are the unambiguous ones.
     return any(s in msg for s in (
         "api key", "api_key", "unauthenticated", "permission denied",
-        "insufficient_quota", "insufficient quota", "billing",
-        "credit balance", "payment", "not installed", "not set"))
+        "not installed", "not set") + _ACCOUNT_DEAD_MARKERS)
 
 
 def _reason(exc: Exception) -> str:
@@ -569,11 +711,11 @@ def _openai_client_or_new():
             raise ProviderUnavailable(
                 "the `openai` package is not installed (pip install -r "
                 "requirements.txt)") from exc
-        key = os.environ.get("OPENAI_API_KEY", "").strip()
+        key = api_key(OPENAI)
         if not key:
             raise ProviderUnavailable(
-                "OPENAI_API_KEY is not set — add it as a repository secret and "
-                "expose it to the workflow step")
+                "no OpenAI key — set one in the dashboard's Settings tab, or "
+                "expose OPENAI_API_KEY to the workflow step")
         _openai_client = openai.OpenAI(api_key=key)
     return _openai_client
 
@@ -775,6 +917,91 @@ def _wrong_endpoint(exc: Exception) -> bool:
         "endpoint" in msg or "api" in msg)
 
 
+# ---- provider: Anthropic -----------------------------------------------------
+# Raw REST rather than the `anthropic` SDK, for the reason store.py gives for
+# PostgREST: this is one POST with no streaming, no tools and no session, and
+# `requests` is already a dependency. Adding an SDK would buy nothing here.
+ANTHROPIC_BASE = os.environ.get("ANTHROPIC_BASE", "https://api.anthropic.com/v1")
+ANTHROPIC_VERSION = os.environ.get("ANTHROPIC_VERSION", "2023-06-01")
+
+
+class _AnthropicError(RuntimeError):
+    """Carries the HTTP status so classify() can route it like any SDK error."""
+
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _anthropic_text(model: str, system_prompt: str, user_payload: str,
+                    max_tokens: int) -> tuple[str, dict | None]:
+    """One Messages-API completion. Returns (text, usage).
+
+    NOTE ON JSON: unlike OpenAI (response_format) and Gemini (response_mime_type),
+    the Messages API has no forced-JSON switch. The obvious substitute — prefilling
+    an assistant turn with "{" — is deliberately NOT used: the gatekeeper prompt
+    may legitimately answer with a top-level ARRAY, and a "{" prefill would
+    corrupt exactly that response. Both stages already carry their schema in the
+    prompt, _extract_json tolerates prose and code fences around the payload, and
+    a genuinely unparseable body classifies as SOFT and gets retried, then failed
+    over. That is the same safety net every provider relies on for a bad body.
+    """
+    import requests   # local: keeps a missing dependency a ProviderUnavailable
+
+    key = api_key(ANTHROPIC)
+    if not key:
+        raise ProviderUnavailable(
+            "no Anthropic key — set one in the dashboard's Settings tab, or "
+            "expose ANTHROPIC_API_KEY to the workflow step")
+
+    try:
+        resp = requests.post(
+            f"{ANTHROPIC_BASE}/messages",
+            headers={
+                "content-type": "application/json",
+                "x-api-key": key,
+                "anthropic-version": ANTHROPIC_VERSION,
+            },
+            data=json.dumps({
+                "model": model,
+                # Required by /v1/messages, unlike the other two providers.
+                "max_tokens": max_tokens,
+                "system": system_prompt,
+                "messages": [{"role": "user", "content": user_payload}],
+            }).encode("utf-8"),
+            timeout=180,
+        )
+    except requests.RequestException as exc:
+        # Connection/timeout: BUSY by classify()'s ConnectionError/marker rules,
+        # so this fails over rather than aborting the run.
+        raise _AnthropicError(f"Anthropic request failed: {exc}") from exc
+
+    if not resp.ok:
+        # Surface Anthropic's own {type, message} body — a bare status is
+        # indistinguishable between a dead key and an unknown model id, which
+        # are UNUSABLE for opposite reasons (provider-wide vs. this model only).
+        detail = resp.text.strip()[:400]
+        raise _AnthropicError(f"{resp.status_code} Anthropic request failed: "
+                              f"{detail}", resp.status_code)
+
+    data = resp.json()
+    text = "".join(
+        block.get("text", "") or ""
+        for block in (data.get("content") or [])
+        if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+    # Built by hand rather than through _usage_of: that helper walks ATTRIBUTES
+    # of an SDK object, and this response is a plain dict.
+    u = data.get("usage") or {}
+    prompt = int(u.get("input_tokens") or 0)
+    completion = int(u.get("output_tokens") or 0)
+    total = prompt + completion
+    usage = ({"prompt": prompt, "completion": completion,
+              "reasoning": 0, "total": total} if total else None)
+    return text, usage
+
+
 # ---- provider: Gemini --------------------------------------------------------
 _client = None          # kept at this name: tests inject a fake here
 _genai_types = None
@@ -797,9 +1024,11 @@ def _client_or_new():
     global _client
     if _client is None:
         genai, _ = _gemini_sdk()
-        key = os.environ.get("GEMINI_API_KEY", "").strip()
+        key = api_key(GEMINI)
         if not key:
-            raise ProviderUnavailable("GEMINI_API_KEY is not set")
+            raise ProviderUnavailable(
+                "no Gemini key — set one in the dashboard's Settings tab, or "
+                "expose GEMINI_API_KEY to the workflow step")
         _client = genai.Client(api_key=key)
     return _client
 
@@ -834,6 +1063,16 @@ def _gemini_text(model: str, system_prompt: str, user_payload: str,
     return resp.text, _usage_of(resp)
 
 
+# One adapter per provider, all with the same
+# (model, system, user, max_tokens) -> (text, usage) signature. Declared after
+# all three exist so the table holds functions rather than forward references.
+_GENERATORS = {
+    OPENAI: _openai_text,
+    ANTHROPIC: _anthropic_text,
+    GEMINI: _gemini_text,
+}
+
+
 # ---- request ----------------------------------------------------------------
 def _extract_json(text: str | None):
     """Parse the first valid JSON object/array, ignoring trailing extra data."""
@@ -858,7 +1097,7 @@ def _complete_one_model(system_prompt: str, user_payload: str, model: str,
     Returns (parsed, usage); usage is None when the response reported none.
     """
     provider, bare = split_model(model)
-    generate = _openai_text if provider == OPENAI else _gemini_text
+    generate = _GENERATORS.get(provider, _gemini_text)
     last_err: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
@@ -867,6 +1106,14 @@ def _complete_one_model(system_prompt: str, user_payload: str, model: str,
             return _extract_json(text), usage
         except Exception as exc:  # noqa: BLE001
             last_err = exc
+            # A DAILY cap will not clear before tomorrow, so the retry ladder
+            # spends ~2 minutes of a 60-minute budget to collect six more
+            # refusals. Advancing immediately leaves that time to a model that
+            # can actually answer — which is the whole point of the chain.
+            if _is_daily_limit(exc):
+                _event(f"{model}: daily quota reached — not retrying, the cap "
+                       f"resets tomorrow; moving on")
+                raise
             if attempt < MAX_RETRIES - 1 and classify(exc) in (BUSY, SOFT):
                 sleep = min(BACKOFF_CAP, BACKOFF_BASE * (2 ** attempt))
                 sleep += random.uniform(0, BACKOFF_BASE)   # jitter

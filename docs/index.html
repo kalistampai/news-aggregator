@@ -23,13 +23,50 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=2026-08-28b" />
+  <link rel="stylesheet" href="style.css?v=2026-08-30a" />
 </head>
-<body data-build="2026-08-28b">
+<!-- STARTS LOCKED, with the gate itself still hidden — deliberately a blank
+     page for the moment boot() takes to check the session. The alternative
+     (shell visible, gate hidden) paints the dashboard on every single load
+     before the gate covers it, which flashes the previous reader's briefing at
+     whoever opens the laptop next. boot() then either showGate() or
+     hideGate()+startApp(); neither state is reachable before that decision. -->
+<body class="is-locked" data-build="2026-08-30a">
+  <noscript>
+    <p style="max-width:34rem;margin:18vh auto;padding:0 1.5rem;
+              font:14px/1.6 system-ui,sans-serif;color:#a8b6c4;text-align:center">
+      DISPATCH needs JavaScript: the briefing is fetched from Supabase and
+      decoded in the browser, and signing in is what authorizes the read.
+    </p>
+  </noscript>
   <div class="read-progress" aria-hidden="true">
     <span class="read-progress__bar" id="readProgressBar"></span>
   </div>
   <div class="scanline" aria-hidden="true"></div>
+
+  <!-- ============================ SIGN IN =================================
+       Supabase Auth against the shared project. This form is the front door,
+       NOT the lock: migration 004 revoked `anon` SELECT on briefings and
+       feed_reports, so the publishable key below identifies the project but
+       reads nothing. Every table request carries the signed-in user's JWT. -->
+  <div class="gate" id="authScreen" hidden>
+    <form class="gate__card" id="authForm">
+      <h1 class="gate__mark">DISPATCH<span class="wordmark__cursor">_</span></h1>
+      <p class="gate__sub">// restricted — sign in to read the briefing</p>
+      <label class="gate__field">
+        <span>Email</span>
+        <input type="email" id="authEmail" autocomplete="username"
+               spellcheck="false" required />
+      </label>
+      <label class="gate__field">
+        <span>Password</span>
+        <input type="password" id="authPassword" autocomplete="current-password"
+               required />
+      </label>
+      <button type="submit" class="gate__submit" id="authSubmit">Authenticate</button>
+      <p class="gate__error" id="authError" hidden></p>
+    </form>
+  </div>
 
   <header class="masthead">
     <div class="masthead__row">
@@ -49,6 +86,12 @@
         <span class="tokentag" id="tokenTag" hidden></span>
         <span class="flag" id="archiveFlag" hidden>ARCHIVED</span>
         <time class="stamp" id="dateStamp">—</time>
+        <span class="mast__actions">
+          <button type="button" class="mast__btn" id="settingsBtn"
+                  title="Model settings">&#9881;<span>settings</span></button>
+          <button type="button" class="mast__btn" id="signOutBtn"
+                  title="Sign out">&#10162;</button>
+        </span>
       </div>
     </div>
     <p class="masthead__sub">Daily news aggregated and compiled · review <a href="https://github.com/kalistampai/news-aggregator/blob/main/pipeline/feeds.txt" target="_blank" rel="noopener noreferrer">news sources</a> to make updates</p>
@@ -234,6 +277,175 @@
     <span id="footerNote">DISPATCH · If you don't read the news, you're uninformed. If you read the news, you're mis-informed.</span>
   </footer>
 
-  <script src="script.js?v=2026-08-28b"></script>
+  <!-- =========================== SETTINGS ==============================
+       Writes news_aggregator.app_settings, which the pipeline reads at the
+       start of each run (pipeline/settings.py). This is the ONLY place model
+       choice lives now — the workflow file no longer carries it. -->
+  <div class="modal" id="settingsModal" hidden role="dialog" aria-modal="true"
+       aria-labelledby="settingsTitle">
+    <div class="modal__backdrop" data-close-settings></div>
+    <div class="modal__card">
+
+      <div class="modal__head">
+        <h2 id="settingsTitle">Settings</h2>
+        <button type="button" class="modal__x" data-close-settings
+                title="Close">&times;</button>
+      </div>
+
+      <div class="modal__body">
+
+        <!-- The single most important thing to say on this screen. The pipeline
+             is a scheduled job; nothing here re-runs it. -->
+        <p class="modal__notice" id="settingsNotice">
+          Changes apply to the <b>next</b> pipeline run (daily, 06:17 Pacific).
+          They do not regenerate today's briefing.
+        </p>
+
+        <section class="set">
+          <h3 class="set__h">Account</h3>
+          <p class="set__help">
+            Signed in as <b id="accountEmail">—</b>. Briefings are readable only
+            with this account — the publishable key alone reads nothing.
+          </p>
+        </section>
+
+        <section class="set">
+          <h3 class="set__h">Provider keys</h3>
+          <p class="set__help">
+            Stored in Supabase and read by the pipeline at run time. All three
+            matter, not just the active one: the failover chain crosses
+            providers, so a key here is what lets the run recover when another
+            provider is down.
+          </p>
+
+          <label class="set__field">
+            <span class="set__label">OpenAI <i class="set__dot" id="dotOpenai"></i></span>
+            <span class="set__reveal">
+              <input type="password" id="keyOpenai" placeholder="sk-…"
+                     autocomplete="off" spellcheck="false" />
+              <button type="button" class="set__eye" data-reveal="keyOpenai"
+                      title="Show / hide">&#128065;</button>
+            </span>
+            <span class="set__hint">platform.openai.com/api-keys</span>
+          </label>
+
+          <label class="set__field">
+            <span class="set__label">Anthropic <i class="set__dot" id="dotAnthropic"></i></span>
+            <span class="set__reveal">
+              <input type="password" id="keyAnthropic" placeholder="sk-ant-…"
+                     autocomplete="off" spellcheck="false" />
+              <button type="button" class="set__eye" data-reveal="keyAnthropic"
+                      title="Show / hide">&#128065;</button>
+            </span>
+            <span class="set__hint">console.anthropic.com/settings/keys</span>
+          </label>
+
+          <label class="set__field">
+            <span class="set__label">Gemini <i class="set__dot" id="dotGemini"></i></span>
+            <span class="set__reveal">
+              <input type="password" id="keyGemini" placeholder="AIza…"
+                     autocomplete="off" spellcheck="false" />
+              <button type="button" class="set__eye" data-reveal="keyGemini"
+                      title="Show / hide">&#128065;</button>
+            </span>
+            <span class="set__hint">aistudio.google.com/apikey</span>
+          </label>
+        </section>
+
+        <section class="set">
+          <h3 class="set__h">Models</h3>
+          <p class="set__help">
+            Two stages, each with its own model. The <b>gatekeeper</b> scores and
+            filters every article; the <b>editor</b> writes the cards you read.
+            Pick a provider to list the models its key can actually see.
+          </p>
+
+          <label class="set__field">
+            <span class="set__label">Provider</span>
+            <span class="set__row">
+              <select id="setProvider">
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic (Claude)</option>
+                <option value="gemini">Gemini</option>
+              </select>
+              <button type="button" class="set__btn" id="refreshModels"
+                      title="List models this key can use">Refresh</button>
+            </span>
+            <span class="set__hint" id="discoveryHint">
+              Enter that provider's key above, then Refresh.
+            </span>
+          </label>
+
+          <label class="set__field">
+            <span class="set__label">Gatekeeper model</span>
+            <select id="setGatekeeper"></select>
+          </label>
+
+          <label class="set__field">
+            <span class="set__label">Editor model</span>
+            <select id="setEditor"></select>
+          </label>
+        </section>
+
+        <section class="set">
+          <h3 class="set__h">Failover chains <span class="set__tag">advanced</span></h3>
+          <p class="set__help">
+            Tried in order when the primary is overloaded, capped or out of
+            credit. Comma-separated, each id provider-prefixed
+            (<code>openai:gpt-5.6-terra</code>).
+          </p>
+          <p class="set__help">
+            <b>List two or more models from the same provider.</b> Quotas are
+            metered per model, so the most likely overnight failure — one model
+            hitting its own cap — is fixed by the next model on the
+            <em>same key</em>, with no second vendor needed. Add a different
+            provider after those to cover an outage or a dry account.
+          </p>
+          <label class="set__field">
+            <span class="set__label">Gatekeeper fallbacks</span>
+            <input type="text" id="setGatekeeperChain" spellcheck="false"
+                   autocomplete="off" placeholder="gemini:gemini-3.1-flash-lite, openai:gpt-5.6-terra" />
+          </label>
+          <label class="set__field">
+            <span class="set__label">Editor fallbacks</span>
+            <input type="text" id="setEditorChain" spellcheck="false"
+                   autocomplete="off" placeholder="gemini:gemini-3.1-flash-lite, openai:gpt-5.6-terra" />
+          </label>
+          <label class="set__field">
+            <span class="set__label">OpenAI reasoning effort</span>
+            <select id="setEffort">
+              <option value="low">low — scoring and summarising (default)</option>
+              <option value="medium">medium</option>
+              <option value="high">high — costs output tokens</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="set">
+          <button type="button" class="set__btn set__btn--wide" id="testKeys">
+            Test provider keys
+          </button>
+          <div class="set__results" id="testResults"></div>
+        </section>
+      </div>
+
+      <div class="modal__foot">
+        <span class="set__saved" id="saveState"></span>
+        <span class="set__foot-actions">
+          <button type="button" class="set__btn" data-close-settings>Close</button>
+          <button type="button" class="set__btn set__btn--go" id="saveSettings">
+            Save settings
+          </button>
+        </span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pinned version + SRI: a silently-swapped auth library is the one
+       dependency that could hand over the session token. -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.111.0/dist/umd/supabase.min.js"
+          integrity="sha384-fPWur1rx/DE6YtXP/x0MD6dd90RgnVsz5yX/DIg7CcVAnTBZsENWuIcpvVTM39ti"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="script.js?v=2026-08-30a"></script>
 </body>
 </html>

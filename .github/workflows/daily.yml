@@ -68,46 +68,66 @@ jobs:
         working-directory: pipeline
         env:
           PYTHONUNBUFFERED: "1"
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           # ---- persistence -------------------------------------------------
-          # Supabase Postgres holds the briefing, the feed report and the
-          # cross-run seen-set. SUPABASE_SERVICE_KEY is the SERVICE ROLE key: it
-          # bypasses Row Level Security, so it is a full-database credential and
-          # lives only here. The dashboard uses the anon key, which RLS limits
-          # to SELECT — never put the service key in docs/.
+          # Supabase Postgres holds the briefing, the feed report, the cross-run
+          # seen-set AND (since migration 004) the model configuration itself.
+          # SUPABASE_SERVICE_KEY is the SERVICE ROLE key: it bypasses Row Level
+          # Security, so it is a full-database credential and lives only here.
+          # The dashboard reads with the publishable key plus a user JWT — never
+          # put the service key in docs/.
+          #
+          # THESE THREE ARE NOW THE ONLY REQUIRED SETTINGS. Everything about
+          # which model writes the briefing moved to the dashboard's Settings
+          # tab; pipeline/settings.py reads that row before the first stage runs.
           SUPABASE_URL:         ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           # Tables are isolated from the other apps in this shared project.
           SUPABASE_SCHEMA: news_aggregator
 
-          # ---- models -----------------------------------------------------
-          # OpenAI GPT-5.6 trial. Every id is provider-prefixed, so one ordered
-          # list can cross providers: best OpenAI model first, then the next two,
-          # then Gemini as the floor.
+          # ---- provider keys: OPTIONAL BACKSTOP ----------------------------
+          # The Settings tab is the normal source of these. They stay here as a
+          # fallback for the one morning that matters: if Supabase is unreachable
+          # when settings.py runs, it logs the failure and continues on the
+          # environment — and with no key anywhere, there is no briefing at all.
+          # llm.api_key() prefers the stored value and falls back to these, so a
+          # secret that is set but stale is harmless. Safe to leave unset.
+          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+
+          # ---- model chain: DEFAULTS ONLY ----------------------------------
+          # Used only when app_settings has no value for a field (a fresh
+          # install, or SETTINGS_FROM_DB=0). The dashboard overrides all of it.
           #
           # THE GEMINI ENTRY IS NOT OPTIONAL. This job runs at 06:17 Pacific with
-          # nobody awake. If OPENAI_API_KEY is unset, the credit runs out, or the
-          # model ids turn out to be wrong, the chain walks past OpenAI entirely
-          # and Gemini still writes the briefing. The failure is reported loudly
-          # in the log and flagged on the dashboard — it is not swallowed.
+          # nobody awake. If the OpenAI key is missing, the credit runs out, or
+          # the model ids turn out to be wrong, the chain walks past OpenAI
+          # entirely and Gemini still writes the briefing. The failure is
+          # reported loudly in the log and flagged on the dashboard.
+          # DEPTH WITHIN A PROVIDER FIRST, then across providers. Quotas are
+          # metered per model, so the likeliest failure — one model hitting its
+          # own cap — is answered by the next model on the SAME key. Two Gemini
+          # entries mean a Gemini-only setup still has somewhere to go.
           GATEKEEPER_MODEL: openai:gpt-5.6-sol
           EDITOR_MODEL:     openai:gpt-5.6-sol
-          GATEKEEPER_FALLBACK_MODELS: openai:gpt-5.6-terra,openai:gpt-5.6-luna,gemini:gemini-3.1-flash-lite
-          EDITOR_FALLBACK_MODELS:     openai:gpt-5.6-terra,openai:gpt-5.6-luna,gemini:gemini-3.5-flash
+          GATEKEEPER_FALLBACK_MODELS: openai:gpt-5.6-terra,openai:gpt-5.6-luna,gemini:gemini-3.5-flash,gemini:gemini-3.1-flash-lite
+          EDITOR_FALLBACK_MODELS:     openai:gpt-5.6-terra,openai:gpt-5.6-luna,gemini:gemini-3.5-flash,gemini:gemini-3.1-flash-lite
 
-          # Verify those ids against /v1/models once per run and correct a
+          # Set to "0" to ignore app_settings entirely and run purely on the
+          # values above — how to reproduce a run locally, or to bypass a bad
+          # row without needing the dashboard first.
+          SETTINGS_FROM_DB: "1"
+
+          # Verify OpenAI ids against /v1/models once per run and correct a
           # near-miss (family name vs. dated snapshot id) instead of 404-ing
           # every call all night. Set to "0" to use the ids exactly as written.
           LLM_RESOLVE_MODELS: "1"
 
-          # GPT-5.6 is a reasoning family: reasoning tokens are billed as output
-          # AND share the output budget, so a long think can truncate the JSON.
-          # 'low' fits scoring/summarising; the headroom is added on top of each
-          # stage's max_tokens so the answer always has room. Raise the effort if
-          # card quality disappoints — it costs output tokens.
-          OPENAI_REASONING_EFFORT: "low"
-          OPENAI_TOKEN_HEADROOM:   "4000"
+          # Reasoning-token headroom for the GPT-5.x family: reasoning bills as
+          # output AND shares the output budget, so a long think can truncate
+          # the JSON. Added on top of each stage's max_tokens. (The effort level
+          # itself is set in the dashboard.)
+          OPENAI_TOKEN_HEADROOM: "4000"
 
           # ---- rate control ----------------------------------------------
           # Per-provider minimum gap between calls, retries included.

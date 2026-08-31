@@ -27,7 +27,7 @@
      does not match BUILD in script.js, the browser/CDN is serving a stale
      style.css and the page says so out loud instead of failing silently.
      Bump this together with ?v=, data-build, and BUILD. */
-  --build: "2026-08-28b";
+  --build: "2026-08-30a";
 }
 
 * { box-sizing: border-box; }
@@ -888,4 +888,199 @@ a, button, input, select { -webkit-tap-highlight-color: transparent; }
   .category[data-collapsed="true"] .category__toggle:hover .category__chev {
     border-color: var(--accent-dim);
   }
+}
+
+/* ==========================================================================
+   SIGN-IN GATE + SETTINGS                                    (build 2026-08-30a)
+   The gate is the front door for Supabase Auth; the real lock is migration 004,
+   which revoked `anon` SELECT on briefings and feed_reports. Hiding the shell
+   with a body class rather than wrapping the whole document keeps this additive
+   — the masthead, board and footer stay exactly where they were.
+   ========================================================================== */
+
+body.is-locked .masthead,
+body.is-locked .diagnostics,
+body.is-locked .tabs,
+body.is-locked .board,
+body.is-locked .footer { display: none !important; }
+
+.gate {
+  position: fixed; inset: 0; z-index: 400;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background:
+    radial-gradient(110% 48% at 50% -12%, #172638 0%, var(--bg) 58%) fixed;
+}
+.gate__card {
+  width: min(380px, 100%);
+  display: flex; flex-direction: column; gap: 14px;
+  padding: 30px 26px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 24px 60px #0006;
+}
+.gate__mark {
+  margin: 0; font-family: var(--display); font-size: 26px; letter-spacing: -.5px;
+}
+.gate__sub {
+  margin: -6px 0 4px; font-family: var(--mono); font-size: 12px;
+  color: var(--ink-faint);
+}
+.gate__field { display: flex; flex-direction: column; gap: 5px; }
+.gate__field span {
+  font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .09em; color: var(--ink-dim);
+}
+.gate__field input,
+.set__field input,
+.set__field select {
+  width: 100%; padding: 9px 11px;
+  background: var(--bg-2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px;
+  font-family: var(--mono); font-size: 13px;
+}
+.gate__field input:focus,
+.set__field input:focus,
+.set__field select:focus { border-color: var(--accent); outline: none; }
+
+.gate__submit {
+  margin-top: 4px; padding: 10px 14px; cursor: pointer;
+  background: var(--accent); color: #06231d;
+  border: 0; border-radius: 8px;
+  font-family: var(--mono); font-size: 13px; font-weight: 700;
+  letter-spacing: .04em;
+}
+.gate__submit:disabled { opacity: .6; cursor: progress; }
+.gate__error {
+  margin: 0; color: var(--hot);
+  font-family: var(--mono); font-size: 12px; line-height: 1.45;
+}
+
+/* ------------------------------- masthead buttons ------------------------ */
+.mast__actions { display: inline-flex; gap: 6px; margin-left: 4px; }
+.mast__btn {
+  display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+  padding: 3px 8px;
+  background: var(--surface-2); color: var(--ink-dim);
+  border: 1px solid var(--line); border-radius: 999px;
+  font-family: var(--mono); font-size: 11px;
+}
+.mast__btn:hover { color: var(--accent); border-color: var(--accent-dim); }
+
+/* ---------------------------------- modal -------------------------------- */
+.modal {
+  position: fixed; inset: 0; z-index: 350;
+  display: flex; align-items: flex-start; justify-content: center;
+  padding: 40px 16px; overflow-y: auto;
+}
+.modal__backdrop {
+  position: fixed; inset: 0; background: #000a; backdrop-filter: blur(3px);
+}
+.modal__card {
+  position: relative; width: min(620px, 100%);
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: 0 24px 60px #0007;
+}
+.modal__head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--line);
+}
+.modal__head h2 { margin: 0; font-family: var(--display); font-size: 17px; }
+.modal__x {
+  cursor: pointer; background: none; border: 0; color: var(--ink-faint);
+  font-size: 22px; line-height: 1;
+}
+.modal__x:hover { color: var(--hot); }
+.modal__body { padding: 18px 20px; }
+.modal__foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 20px; border-top: 1px solid var(--line);
+}
+.set__foot-actions { display: inline-flex; gap: 8px; }
+.modal__notice {
+  margin: 0 0 20px; padding: 10px 12px;
+  background: var(--accent-soft); border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.55;
+  color: var(--ink-dim);
+}
+.modal__notice b { color: var(--accent); }
+
+/* -------------------------------- settings ------------------------------- */
+.set { margin-bottom: 26px; }
+.set:last-child { margin-bottom: 0; }
+.set__h {
+  margin: 0 0 6px; font-family: var(--mono); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .12em; color: var(--accent);
+}
+.set__tag {
+  margin-left: 6px; padding: 1px 6px;
+  background: var(--surface-3); border-radius: 999px;
+  font-size: 9.5px; letter-spacing: .08em; color: var(--ink-faint);
+}
+.set__help {
+  margin: 0 0 14px; font-size: 12.5px; line-height: 1.55; color: var(--ink-dim);
+}
+.set__help code {
+  padding: 1px 5px; background: var(--bg-2); border-radius: 4px;
+  font-family: var(--mono); font-size: 11.5px; color: var(--accent);
+}
+.set__field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+.set__label {
+  display: flex; align-items: center; gap: 7px;
+  font-family: var(--mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .09em; color: var(--ink-dim);
+}
+.set__hint { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+.set__row { display: flex; gap: 8px; }
+.set__row select { flex: 1; }
+
+/* Key-present indicator. Deliberately says only "set / not set" — never a
+   masked preview, which invites reading a real key off a shared screen. */
+.set__dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--line-strong); box-shadow: 0 0 0 2px #0003;
+}
+.set__dot[data-on="yes"] { background: var(--accent); }
+
+.set__reveal { position: relative; display: block; }
+.set__reveal input { padding-right: 38px !important; }
+.set__eye {
+  position: absolute; top: 50%; right: 6px; transform: translateY(-50%);
+  cursor: pointer; padding: 3px 5px;
+  background: none; border: 0; font-size: 13px; opacity: .55;
+}
+.set__eye:hover { opacity: 1; }
+
+.set__btn {
+  cursor: pointer; padding: 8px 13px;
+  background: var(--surface-2); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px;
+  font-family: var(--mono); font-size: 12px;
+}
+.set__btn:hover { border-color: var(--accent-dim); color: var(--accent); }
+.set__btn--wide { width: 100%; }
+.set__btn--go {
+  background: var(--accent); color: #06231d; border-color: var(--accent);
+  font-weight: 700;
+}
+.set__btn--go:hover { color: #06231d; filter: brightness(1.08); }
+
+.set__saved {
+  font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+  line-height: 1.4; flex: 1;
+}
+.set__results { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
+.set__result {
+  padding: 7px 10px; border-radius: 6px; background: var(--bg-2);
+  border-left: 2px solid var(--line-strong);
+  font-family: var(--mono); font-size: 11.5px; color: var(--ink-dim);
+}
+.set__result[data-state="ok"]   { border-left-color: var(--accent); color: var(--ink); }
+.set__result[data-state="bad"]  { border-left-color: var(--hot); color: var(--hot); }
+.set__result[data-state="wait"] { border-left-color: var(--amber); }
+
+@media (max-width: 560px) {
+  .modal { padding: 16px 10px; }
+  .mast__btn span { display: none; }
 }

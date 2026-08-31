@@ -44,8 +44,10 @@ import os
 from pathlib import Path
 
 import llm
-from llm import (EDITOR_MODEL, GATEKEEPER_MODEL, EDITOR_FALLBACK_MODELS,
-                 complete_json, FatalLlmError, ModelsBusyError)
+# Model ids are read as `llm.X` at each call site, never imported by name: they
+# are overridden at runtime from the dashboard's Settings tab (settings.apply),
+# and importing the name would freeze the pre-override default. See llm.py.
+from llm import complete_json, FatalLlmError, ModelsBusyError
 
 HERE = Path(__file__).parent
 IN_FILE = HERE / "scored_articles.json"
@@ -74,8 +76,9 @@ def _synthesize(batch: list[dict], today: str) -> dict:
                       "url": a["url"], "snippet": a["snippet"],
                       "why": a["gatekeeper_reasoning"]} for a in batch],
     }, ensure_ascii=False)
-    result = complete_json(PROMPT, payload, EDITOR_MODEL, max_tokens=8000,
-                           fallback_models=EDITOR_FALLBACK_MODELS, stage="editor")
+    result = complete_json(PROMPT, payload, llm.EDITOR_MODEL, max_tokens=8000,
+                           fallback_models=llm.EDITOR_FALLBACK_MODELS,
+                           stage="editor")
     cats = result.get("categories", {}) if isinstance(result, dict) else {}
     return cats if isinstance(cats, dict) else {}
 
@@ -90,9 +93,9 @@ def _model_block(gate_meta) -> dict:
     The gatekeeper's record is read from scored_articles.json when present, so
     this is correct whether the stages ran in one process (run.py) or separately.
     """
-    editor = llm.stage_report("editor", EDITOR_MODEL)
+    editor = llm.stage_report("editor", llm.EDITOR_MODEL)
     gate = (gate_meta if isinstance(gate_meta, dict) and gate_meta.get("configured")
-            else llm.stage_report("gatekeeper", GATEKEEPER_MODEL))
+            else llm.stage_report("gatekeeper", llm.GATEKEEPER_MODEL))
 
     def merged(key: str) -> list[str]:
         out: list[str] = []
