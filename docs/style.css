@@ -27,7 +27,7 @@
      does not match BUILD in script.js, the browser/CDN is serving a stale
      style.css and the page says so out loud instead of failing silently.
      Bump this together with ?v=, data-build, and BUILD. */
-  --build: "2026-08-30a";
+  --build: "2026-08-30d";
 }
 
 * { box-sizing: border-box; }
@@ -1084,3 +1084,27 @@ body.is-locked .footer { display: none !important; }
   .modal { padding: 16px 10px; }
   .mast__btn span { display: none; }
 }
+
+/* -------------------- provider-aware settings (build 2026-08-30d) --------- */
+/* Provider-specific notes, shown in place of a tuning control for providers
+   that expose none — so the section never looks like it failed to load. */
+.set__note {
+  margin: 0 0 14px; padding: 8px 11px;
+  background: var(--bg-2); border-left: 2px solid var(--line-strong);
+  border-radius: 0 6px 6px 0;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.55;
+  color: var(--ink-faint);
+}
+.set__note b { color: var(--ink-dim); }
+
+/* Key rows stay visible for every provider (failover needs them all); the
+   selected one is marked rather than isolated. */
+.set__field[data-provider-key] {
+  padding: 8px 10px; margin-left: -10px; margin-right: -10px;
+  border-left: 2px solid transparent; border-radius: 0 6px 6px 0;
+  transition: background .15s, border-color .15s;
+}
+.set__field[data-provider-key][data-active="true"] {
+  background: var(--accent-soft); border-left-color: var(--accent);
+}
+.set__field[data-provider-key][data-active="true"] .set__label { color: var(--ink); }

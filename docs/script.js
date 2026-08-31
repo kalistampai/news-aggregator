@@ -43,7 +43,7 @@ const CONFIG = {
    <body data-build>. A mismatch means one of the two files is stale — usually a
    cached script.js on GitHub Pages — which is exactly how a removed control ends
    up referenced by old code and throws "Cannot set properties of null". */
-const BUILD = "2026-08-30a";
+const BUILD = "2026-08-30d";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -402,9 +402,45 @@ async function signIn(email, password) {
   return { ok: true };
 }
 
+/* Sign out MUST end with a signed-out browser, whatever the network says.
+   Two ways this used to fail silently, both reported as "the button does nothing":
+
+     1. `auth.signOut()` defaults to scope:'global' — a round trip to
+        /auth/v1/logout. Offline, a 403, or an already-expired token rejects the
+        promise, and the un-caught rejection skipped location.reload() entirely.
+     2. Reloading anyway after a failed server revoke left the session sitting in
+        localStorage, so the reload signed you straight back in.
+
+   So: try the server revoke, fall back to a local-only revoke (no network), then
+   purge the persisted token by hand, and reload no matter which step got there. */
 async function signOut() {
+  const button = $("#signOutBtn");
+  if (button) { button.disabled = true; button.textContent = "…"; }
+
   const client = supa();
-  if (client) await client.auth.signOut();
+  try {
+    if (client) await client.auth.signOut();
+  } catch (globalErr) {
+    console.warn("[DISPATCH] server sign-out failed, revoking locally:", globalErr);
+    try {
+      // scope:'local' only clears this browser — it cannot fail on the network.
+      if (client) await client.auth.signOut({ scope: "local" });
+    } catch (localErr) {
+      console.warn("[DISPATCH] local sign-out failed, purging storage:", localErr);
+    }
+  }
+
+  // Belt and braces: supabase-js persists under `sb-<project-ref>-auth-token`.
+  // Matched by pattern rather than a derived name so a change to that scheme
+  // cannot quietly resurrect the session on reload.
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (/^sb-.*-auth-token$/.test(key)) localStorage.removeItem(key);
+    }
+  } catch (storageErr) {                    // private mode / blocked site data
+    console.warn("[DISPATCH] could not clear stored session:", storageErr);
+  }
+
   SESSION = null;
   location.reload();
 }
@@ -1494,26 +1530,37 @@ function checkAssetVersions() {
    at noon takes effect at the next 06:17 run. The modal says so out loud,
    because "I changed the model and the briefing looks identical" is otherwise
    the obvious and wrong conclusion to draw. */
+/* Bearer-token model listing in OpenAI's shape — {data:[{id}]}. Shared by the
+   six compatible providers AND by OpenAI itself, since it is OpenAI's own
+   format. Anthropic and Gemini differ enough to need their own. */
+function openAiStyleDiscover(base) {
+  return async function discover(key) {
+    const r = await fetch(`${base}/models`, {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      throw new Error(j?.error?.message || j?.message || `HTTP ${r.status}`);
+    }
+    return (j.data || j.models || []).map((m) => m.id || m.name).filter(Boolean);
+  };
+}
+
+/* THE registry. Key rows and the provider dropdown are both generated from it,
+   so a provider cannot exist in the markup and not in the code (or vice versa).
+   `column` mirrors the app_settings column names created by migrations 004/005,
+   and matches pipeline/settings.py, which derives them the same way. */
 const PROVIDERS = {
   openai: {
     label: "OpenAI",
-    keyInput: "#keyOpenai",
-    dot: "#dotOpenai",
-    column: "openai_api_key",
-    async discover(key) {
-      const r = await fetch("https://api.openai.com/v1/models", {
-        headers: { Authorization: `Bearer ${key}` },
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
-      return (j.data || []).map((m) => m.id);
-    },
+    keysUrl: "platform.openai.com/api-keys",
+    placeholder: "sk-…",
+    discover: openAiStyleDiscover("https://api.openai.com/v1"),
   },
   anthropic: {
-    label: "Anthropic",
-    keyInput: "#keyAnthropic",
-    dot: "#dotAnthropic",
-    column: "anthropic_api_key",
+    label: "Anthropic (Claude)",
+    keysUrl: "console.anthropic.com/settings/keys",
+    placeholder: "sk-ant-…",
     async discover(key) {
       const r = await fetch("https://api.anthropic.com/v1/models", {
         headers: {
@@ -1531,9 +1578,8 @@ const PROVIDERS = {
   },
   gemini: {
     label: "Gemini",
-    keyInput: "#keyGemini",
-    dot: "#dotGemini",
-    column: "gemini_api_key",
+    keysUrl: "aistudio.google.com/apikey",
+    placeholder: "AIza…",
     async discover(key) {
       const r = await fetch(
         "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=" +
@@ -1544,7 +1590,88 @@ const PROVIDERS = {
       return (j.models || []).map((m) => (m.name || "").replace(/^models\//, ""));
     },
   },
+
+  /* OpenAI-wire-compatible. Base URLs are the vendors' documented
+     COMPATIBILITY endpoints, which are not always their native ones — Cohere's
+     native API is /v2/chat and a different shape entirely. These mirror
+     llm._COMPAT exactly; changing one without the other breaks a provider. */
+  groq: {
+    label: "Groq",
+    keysUrl: "console.groq.com/keys",
+    placeholder: "gsk_…",
+    discover: openAiStyleDiscover("https://api.groq.com/openai/v1"),
+  },
+  cerebras: {
+    label: "Cerebras",
+    keysUrl: "cloud.cerebras.ai",
+    placeholder: "csk-…",
+    discover: openAiStyleDiscover("https://api.cerebras.ai/v1"),
+  },
+  openrouter: {
+    label: "OpenRouter",
+    keysUrl: "openrouter.ai/keys",
+    placeholder: "sk-or-…",
+    discover: openAiStyleDiscover("https://openrouter.ai/api/v1"),
+  },
+  mistral: {
+    label: "Mistral AI",
+    keysUrl: "console.mistral.ai/api-keys",
+    placeholder: "…",
+    discover: openAiStyleDiscover("https://api.mistral.ai/v1"),
+  },
+  cohere: {
+    label: "Cohere",
+    keysUrl: "dashboard.cohere.com/api-keys",
+    placeholder: "…",
+    discover: openAiStyleDiscover("https://api.cohere.ai/compatibility/v1"),
+  },
+  huggingface: {
+    label: "Hugging Face",
+    keysUrl: "huggingface.co/settings/tokens",
+    placeholder: "hf_…",
+    discover: openAiStyleDiscover("https://router.huggingface.co/v1"),
+  },
 };
+
+// Derived, never hand-written: one source of truth for ids across markup,
+// storage columns and the pipeline.
+for (const [id, p] of Object.entries(PROVIDERS)) {
+  p.id = id;
+  p.column = `${id}_api_key`;
+  p.keyInput = `#key-${id}`;
+  p.dot = `#dot-${id}`;
+}
+
+const CUSTOM_MODEL = "__custom__";
+
+/* Build the key rows and the provider dropdown from the registry above. */
+function renderProviderControls() {
+  const host = el("#providerKeys");
+  const select = el("#setProvider");
+  if (host && host.innerHTML !== undefined) host.innerHTML = "";
+  if (select && select.innerHTML !== undefined) select.innerHTML = "";
+
+  for (const p of Object.values(PROVIDERS)) {
+    if (select && select.appendChild) {
+      select.appendChild(new Option(p.label, p.id));
+    }
+    if (!host || !host.appendChild) continue;
+    const row = document.createElement("label");
+    row.className = "set__field";
+    row.dataset.providerKey = p.id;
+    row.innerHTML =
+      `<span class="set__label">${escapeHtml(p.label)} ` +
+        `<i class="set__dot" id="dot-${p.id}"></i></span>` +
+      `<span class="set__reveal">` +
+        `<input type="password" id="key-${p.id}" autocomplete="off" ` +
+          `spellcheck="false" placeholder="${escapeHtml(p.placeholder)}" />` +
+        `<button type="button" class="set__eye" data-reveal="key-${p.id}" ` +
+          `title="Show / hide">&#128065;</button>` +
+      `</span>` +
+      `<span class="set__hint">${escapeHtml(p.keysUrl)}</span>`;
+    host.appendChild(row);
+  }
+}
 
 /* DENY-list, not an allow-list. An allow-list keyed to today's naming
    (/^gpt-|^claude-/) would silently hide any model released under an unfamiliar
@@ -1586,20 +1713,32 @@ function chainToArray(text) {
   return String(text || "").split(",").map((s) => s.trim()).filter(Boolean);
 }
 
+/* The chosen model for one stage: the dropdown, unless it is on "Custom…", in
+   which case the free-text id beside it wins. */
+function modelValue(selectSel, customSel) {
+  const select = el(selectSel);
+  if (select.value !== CUSTOM_MODEL) return select.value || null;
+  return el(customSel).value.trim() || null;
+}
+
 async function saveSettings() {
-  const body = [{
+  const row = {
     id: 1,
-    gatekeeper_model: el("#setGatekeeper").value || null,
-    editor_model: el("#setEditor").value || null,
+    gatekeeper_model: modelValue("#setGatekeeper", "#setGatekeeperCustom"),
+    editor_model: modelValue("#setEditor", "#setEditorCustom"),
     gatekeeper_fallback_models: chainToArray(el("#setGatekeeperChain").value),
     editor_fallback_models: chainToArray(el("#setEditorChain").value),
-    openai_api_key: el("#keyOpenai").value.trim() || null,
-    anthropic_api_key: el("#keyAnthropic").value.trim() || null,
-    gemini_api_key: el("#keyGemini").value.trim() || null,
     openai_reasoning_effort: el("#setEffort").value || "low",
     updated_at: new Date().toISOString(),
     updated_by: SESSION?.user?.id || null,
-  }];
+  };
+  // Keys straight off the registry, so a provider added there is saved without
+  // anyone remembering to extend this list.
+  for (const p of Object.values(PROVIDERS)) {
+    const input = $(p.keyInput);
+    row[p.column] = (input?.value || "").trim() || null;
+  }
+  const body = [row];
   const r = await fetch(settingsUrl(), {
     method: "POST",
     headers: {
@@ -1630,11 +1769,30 @@ function syncKeyDots() {
   }
 }
 
+/* Show only the controls that mean something for the selected provider.
+   A reasoning-effort dropdown under Gemini is not a harmless extra field — it
+   reads as a setting that applies, and it does not.
+
+   The KEY fields are deliberately exempt and stay visible for every provider.
+   Hiding them would copy `daily`, which uses exactly one provider at a time,
+   but this pipeline fails over ACROSS providers: the key you are not using is
+   the one that rescues the 06:17 run when your primary is capped. Hiding it
+   behind a dropdown would hide the thing that makes the run fault-tolerant.
+   The active provider's row is highlighted instead. */
+function syncProviderUI(provider = el("#setProvider").value) {
+  $$("[data-provider]").forEach((node) => {
+    node.hidden = node.dataset.provider !== provider;
+  });
+  $$("[data-provider-key]").forEach((node) => {
+    node.dataset.active = String(node.dataset.providerKey === provider);
+  });
+}
+
 /* Populate one stage's <select>. The stored value is always present as an
    option even when discovery never ran or returned something else — otherwise
    opening Settings and pressing Save would silently rewrite the model to
    whatever happened to be first in the list. */
-function fillModelSelect(sel, current, provider) {
+function fillModelSelect(sel, current, provider, customSel) {
   const node = $(sel);
   if (!node) return;
   const ids = (DISCOVERED[provider] || []).filter((id) => id && !NON_CHAT.test(id));
@@ -1645,19 +1803,90 @@ function fillModelSelect(sel, current, provider) {
     node.appendChild(new Option("— enter a key and press Refresh —", ""));
   }
   for (const v of values) node.appendChild(new Option(v, v));
+  // Always reachable: several providers block browser discovery at CORS, and
+  // without this a good key with an unlistable catalogue would be unusable.
+  node.appendChild(new Option("Custom…", CUSTOM_MODEL));
   node.value = current || values[0] || "";
+  if (customSel) syncCustomModel(sel, customSel);
+}
+
+/* Show the free-text id box only while its dropdown is on "Custom…". */
+function syncCustomModel(selectSel, customSel) {
+  const custom = $(customSel);
+  if (custom) custom.hidden = $(selectSel)?.value !== CUSTOM_MODEL;
+}
+
+/* ============================================================ fallback chains
+   THE ROUTER GUARANTEES same-provider-first ordering no matter what this box
+   contains (see llm._candidates in the pipeline) — so this is not what makes
+   "stay within the provider" true. It exists so the box is never left BLANK,
+   which used to mean "whatever cross-provider chain the workflow's env default
+   happens to carry" applies underneath, invisibly, until you look. An empty
+   field now gets a same-provider suggestion the moment one is knowable, so
+   what runs at 06:17 always matches what this screen shows. */
+
+// The provider actually backing one stage's selected value — read from the
+// value itself, not the shared "Provider" dropdown: the two stages are stored
+// independently (gatekeeper_model / editor_model), so this stays correct even
+// in the unusual case they end up on different providers.
+function stageProvider(selectSel, customSel) {
+  const select = el(selectSel);
+  const raw = select.value === CUSTOM_MODEL
+    ? (el(customSel)?.value || "").trim()
+    : select.value;
+  const i = raw.indexOf(":");
+  return i > 0 ? raw.slice(0, i) : "";
+}
+
+// Other known models of `provider`, excluding the one currently primary for
+// this stage. Comes only from DISCOVERED (this session's Refresh results) —
+// deliberately no hardcoded per-vendor list, so a suggestion is never stale
+// against what the key can actually see today.
+function siblingModels(provider, excludeFull) {
+  const ids = (DISCOVERED[provider] || []).filter((id) => id && !NON_CHAT.test(id));
+  return ids
+    .map((id) => `${provider}:${id}`)
+    .filter((full) => full !== excludeFull);
+}
+
+// Tracks the last value THIS code wrote into each chain box, per stage, so a
+// value the user typed by hand is never silently overwritten — only a box that
+// is empty, or still holds exactly what we last suggested, is eligible.
+const AUTO_CHAIN = { gatekeeper: undefined, editor: undefined };
+
+function autoSuggestChain(stage, selectSel, customSel, chainSel) {
+  const input = el(chainSel);
+  const untouched = input.value === "" || input.value === AUTO_CHAIN[stage];
+  if (!untouched) return;
+  const provider = stageProvider(selectSel, customSel);
+  const primaryFull = el(selectSel).value === CUSTOM_MODEL
+    ? (el(customSel)?.value || "").trim()
+    : el(selectSel).value;
+  const siblings = provider ? siblingModels(provider, primaryFull) : [];
+  if (!siblings.length) return;          // nothing to suggest yet — leave as is
+  const suggestion = siblings.join(", ");
+  input.value = suggestion;
+  AUTO_CHAIN[stage] = suggestion;
 }
 
 function fillSettings() {
   const s = SETTINGS || {};
   setProp("#accountEmail", "textContent", SESSION?.user?.email || "—");
-  setProp("#keyOpenai", "value", s.openai_api_key || "");
-  setProp("#keyAnthropic", "value", s.anthropic_api_key || "");
-  setProp("#keyGemini", "value", s.gemini_api_key || "");
-  setProp("#setGatekeeperChain", "value",
-          (s.gatekeeper_fallback_models || []).join(", "));
-  setProp("#setEditorChain", "value",
-          (s.editor_fallback_models || []).join(", "));
+  for (const p of Object.values(PROVIDERS)) {
+    const input = $(p.keyInput);
+    if (input) input.value = s[p.column] || "";
+  }
+
+  const gateChain = (s.gatekeeper_fallback_models || []).join(", ");
+  const editChain = (s.editor_fallback_models || []).join(", ");
+  setProp("#setGatekeeperChain", "value", gateChain);
+  setProp("#setEditorChain", "value", editChain);
+  // A non-empty STORED chain is a deliberate choice (yours, or a prior
+  // auto-suggestion already saved) — mark it as "known", not "blank", so
+  // opening Settings again does not treat it as fair game to overwrite.
+  AUTO_CHAIN.gatekeeper = gateChain || undefined;
+  AUTO_CHAIN.editor = editChain || undefined;
+
   setProp("#setEffort", "value", s.openai_reasoning_effort || "low");
 
   // Default the provider picker to whatever the gatekeeper is already using,
@@ -1666,9 +1895,17 @@ function fillSettings() {
   setProp("#setProvider", "value", PROVIDERS[provider] ? provider : "openai");
 
   const active = el("#setProvider").value;
-  fillModelSelect("#setGatekeeper", s.gatekeeper_model || "", active);
-  fillModelSelect("#setEditor", s.editor_model || "", active);
+  fillModelSelect("#setGatekeeper", s.gatekeeper_model || "", active,
+                  "#setGatekeeperCustom");
+  fillModelSelect("#setEditor", s.editor_model || "", active, "#setEditorCustom");
   syncKeyDots();
+  syncProviderUI(active);
+
+  // Covers the case Refresh already ran earlier this session (DISCOVERED is
+  // cached) and the stored chain was empty — no need to press Refresh again.
+  autoSuggestChain("gatekeeper", "#setGatekeeper", "#setGatekeeperCustom",
+                   "#setGatekeeperChain");
+  autoSuggestChain("editor", "#setEditor", "#setEditorCustom", "#setEditorChain");
 }
 
 async function refreshModels() {
@@ -1685,10 +1922,22 @@ async function refreshModels() {
     const usable = DISCOVERED[provider].filter((id) => !NON_CHAT.test(id));
     hint.textContent = `${usable.length} usable models for this ` +
                        `${PROVIDERS[provider].label} key.`;
-    fillModelSelect("#setGatekeeper", el("#setGatekeeper").value, provider);
-    fillModelSelect("#setEditor", el("#setEditor").value, provider);
+    fillModelSelect("#setGatekeeper", el("#setGatekeeper").value, provider,
+                    "#setGatekeeperCustom");
+    fillModelSelect("#setEditor", el("#setEditor").value, provider,
+                    "#setEditorCustom");
+    // Now that this provider's model list is known, an empty/untouched chain
+    // box can finally be filled with same-provider siblings.
+    autoSuggestChain("gatekeeper", "#setGatekeeper", "#setGatekeeperCustom",
+                     "#setGatekeeperChain");
+    autoSuggestChain("editor", "#setEditor", "#setEditorCustom", "#setEditorChain");
   } catch (e) {
-    hint.textContent = `Could not list models — ${e.message}`;
+    // A browser-side list can fail on CORS even with a perfectly good key —
+    // several of these vendors send no CORS headers on /models. Say so, and
+    // point at the escape hatch instead of implying the key is bad.
+    hint.textContent = `Could not list models — ${e.message}. ` +
+                       `If this is a CORS block, pick "Custom…" and type the ` +
+                       `exact model id; the pipeline calls the API server-side.`;
   }
 }
 
@@ -1732,6 +1981,9 @@ function openSettings() {
 function closeSettings() { setProp("#settingsModal", "hidden", true); }
 
 function wireSettings() {
+  // Build the provider rows and dropdown BEFORE anything queries them.
+  renderProviderControls();
+
   on("#settingsBtn", "click", openSettings);
   on("#signOutBtn", "click", signOut);
   $$("[data-close-settings]").forEach((n) =>
@@ -1741,29 +1993,67 @@ function wireSettings() {
 
   on("#setProvider", "change", (e) => {
     const provider = e.target.value;
-    fillModelSelect("#setGatekeeper", el("#setGatekeeper").value, provider);
-    fillModelSelect("#setEditor", el("#setEditor").value, provider);
+    syncProviderUI(provider);
+    fillModelSelect("#setGatekeeper", el("#setGatekeeper").value, provider,
+                    "#setGatekeeperCustom");
+    fillModelSelect("#setEditor", el("#setEditor").value, provider,
+                    "#setEditorCustom");
     el("#discoveryHint").textContent = DISCOVERED[provider]
       ? `${DISCOVERED[provider].length} models cached for this provider.`
       : `Enter the ${PROVIDERS[provider].label} key above, then Refresh.`;
+    // Switching providers just changed both stages' primary model — re-suggest
+    // an untouched chain for each against the new provider.
+    autoSuggestChain("gatekeeper", "#setGatekeeper", "#setGatekeeperCustom",
+                     "#setGatekeeperChain");
+    autoSuggestChain("editor", "#setEditor", "#setEditorCustom", "#setEditorChain");
   });
 
-  $$("[data-reveal]").forEach((btn) => {
-    btn.addEventListener("click", () => {
+  // Reveal + key-dot listeners are DELEGATED: the rows are generated, so a
+  // direct binding here would attach to nothing and both would silently die.
+  const keys = el("#providerKeys");
+  if (keys && keys.addEventListener) {
+    keys.addEventListener("click", (e) => {
+      const btn = e.target.closest && e.target.closest("[data-reveal]");
+      if (!btn) return;
       const input = document.getElementById(btn.dataset.reveal);
       if (input) input.type = input.type === "password" ? "text" : "password";
     });
-  });
+    keys.addEventListener("input", syncKeyDots);
+  }
 
-  ["#keyOpenai", "#keyAnthropic", "#keyGemini"].forEach((sel) =>
-    on(sel, "input", syncKeyDots));
+  // Custom-model boxes appear only on "Custom…"; changing which model is
+  // primary also re-suggests that stage's fallback chain (still only when the
+  // box is empty/untouched — see AUTO_CHAIN).
+  [["gatekeeper", "#setGatekeeper", "#setGatekeeperCustom", "#setGatekeeperChain"],
+   ["editor", "#setEditor", "#setEditorCustom", "#setEditorChain"]]
+    .forEach(([stage, sel, custom, chain]) => {
+      on(sel, "change", () => {
+        syncCustomModel(sel, custom);
+        autoSuggestChain(stage, sel, custom, chain);
+      });
+      // Typing a custom id is also a model change, just via a text field
+      // instead of a select — the "input" event covers keystrokes.
+      on(custom, "input", () => autoSuggestChain(stage, sel, custom, chain));
+    });
 
   on("#saveSettings", "click", async () => {
     const state = el("#saveState");
     state.textContent = "Saving…";
+    // Last chance: if a chain is still empty (Refresh was never pressed for
+    // this provider), this is a no-op; otherwise it fills in same-provider
+    // siblings so what gets saved is never silently cross-provider-first.
+    autoSuggestChain("gatekeeper", "#setGatekeeper", "#setGatekeeperCustom",
+                     "#setGatekeeperChain");
+    autoSuggestChain("editor", "#setEditor", "#setEditorCustom", "#setEditorChain");
     try {
       await saveSettings();
-      state.textContent = "Saved — applies at the next 06:17 run.";
+      const gateEmpty = !el("#setGatekeeperChain").value.trim();
+      const editEmpty = !el("#setEditorChain").value.trim();
+      state.textContent = (gateEmpty || editEmpty)
+        ? "Saved — no fallback known yet for " +
+          [gateEmpty && "gatekeeper", editEmpty && "editor"].filter(Boolean).join(" / ") +
+          " (press Refresh to enable one). Applies at the next 06:17 run."
+        : "Saved — applies at the next 06:17 run.";
     } catch (e) {
       state.textContent = e.message;
     }

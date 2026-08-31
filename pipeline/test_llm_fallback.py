@@ -702,6 +702,193 @@ def test_a_bad_key_still_kills_the_whole_provider():
     assert llm._provider_wide(err) is True, err
 
 
+# ---- 6. the shared OpenAI-compatible adapter -------------------------------
+# Groq, Cerebras, OpenRouter, Mistral, Cohere and Hugging Face all go through
+# _compat_text. One adapter means one place to get it wrong, so these pin the
+# parts that differ per vendor: the URL called, and whether json mode is taken.
+class FakeResponse:
+    def __init__(self, status=200, payload=None, text=""):
+        self.status_code = status
+        self.ok = 200 <= status < 300
+        self._payload = payload or {}
+        self.text = text or json.dumps(self._payload)
+
+    def json(self):
+        return self._payload
+
+
+class FakeRequests:
+    """Stands in for the `requests` module _compat_text imports locally."""
+
+    class RequestException(Exception):
+        pass
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []           # (url, headers, body)
+
+    def post(self, url, headers=None, data=None, timeout=None):
+        self.calls.append((url, headers or {}, json.loads(data.decode("utf-8"))))
+        item = self.responses.pop(0) if len(self.responses) > 1 else self.responses[0]
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+
+def with_fake_requests(responses):
+    """Install a fake `requests` for the duration of one _compat_text call."""
+    fake = FakeRequests(responses)
+    real = sys.modules.get("requests")
+    sys.modules["requests"] = fake
+    return fake, real
+
+
+def call_compat(provider, responses, model="some-model", key="k-test"):
+    llm.reset_state()
+    llm.apply_settings({"api_keys": {provider: key}})
+    fake, real = with_fake_requests(responses)
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf):
+            out = llm._compat_text(provider, model, "sys", "payload", 100)
+    except Exception as exc:  # noqa: BLE001
+        out = exc
+    finally:
+        if real is not None:
+            sys.modules["requests"] = real
+        else:
+            sys.modules.pop("requests", None)
+    return out, fake, buf.getvalue()
+
+
+OK_BODY = {"choices": [{"message": {"content": GOOD_JSON}}],
+           "usage": {"prompt_tokens": 10, "completion_tokens": 5,
+                     "total_tokens": 15}}
+
+
+def test_every_compat_provider_hits_its_own_base_url():
+    """A wrong base URL is a provider that 404s every night in silence."""
+    expected = {
+        "groq": "https://api.groq.com/openai/v1",
+        "cerebras": "https://api.cerebras.ai/v1",
+        "openrouter": "https://openrouter.ai/api/v1",
+        "mistral": "https://api.mistral.ai/v1",
+        "cohere": "https://api.cohere.ai/compatibility/v1",
+        "huggingface": "https://router.huggingface.co/v1",
+    }
+    assert set(expected) == set(llm._COMPAT), \
+        f"provider set changed: {sorted(set(expected) ^ set(llm._COMPAT))}"
+    for provider, base in expected.items():
+        out, fake, _ = call_compat(provider, [FakeResponse(200, OK_BODY)])
+        assert out[0] == GOOD_JSON, (provider, out)
+        url, headers, _body = fake.calls[0]
+        assert url == f"{base}/chat/completions", (provider, url)
+        assert headers["Authorization"] == "Bearer k-test", (provider, headers)
+
+
+def test_compat_reports_usage():
+    out, _fake, _log = call_compat("groq", [FakeResponse(200, OK_BODY)])
+    assert out[1] == {"prompt": 10, "completion": 5, "reasoning": 0,
+                      "total": 15}, out[1]
+
+
+def test_json_mode_is_requested_then_dropped_if_refused():
+    """Compatible at the wire, not uniformly in features.
+
+    OpenRouter and Hugging Face front other vendors' models, so json mode may or
+    may not exist behind the same base URL. Refusing it must cost one retry, not
+    the model.
+    """
+    refuse = FakeResponse(400, {"error": {"message": "response_format is not supported"}},
+                          text='{"error":{"message":"response_format is not supported"}}')
+    out, fake, log = call_compat(
+        "openrouter", [refuse, FakeResponse(200, OK_BODY)])
+    assert out[0] == GOOD_JSON, out
+    assert len(fake.calls) == 2, fake.calls
+    assert "response_format" in fake.calls[0][2], "json mode was never attempted"
+    assert "response_format" not in fake.calls[1][2], "json mode was not dropped"
+    assert "does not accept response_format" in log, log
+
+
+def test_json_mode_refusal_is_remembered_for_the_run():
+    """The probe costs one request per model, not one per batch."""
+    llm.reset_state()
+    llm._NO_JSON_MODE.add("groq:some-model")
+    llm.apply_settings({"api_keys": {"groq": "k"}})
+    fake, real = with_fake_requests([FakeResponse(200, OK_BODY)])
+    try:
+        with redirect_stdout(io.StringIO()):
+            llm._compat_text("groq", "some-model", "sys", "payload", 100)
+    finally:
+        sys.modules["requests"] = real
+    assert "response_format" not in fake.calls[0][2], \
+        "re-probed json mode for a model already known to refuse it"
+
+
+def test_compat_http_error_carries_its_status_for_classification():
+    out, _fake, _log = call_compat(
+        "cerebras", [FakeResponse(503, {"error": {"message": "overloaded"}},
+                                  text="overloaded")])
+    assert isinstance(out, Exception), out
+    assert llm.classify(out) == llm.BUSY, llm.classify(out)
+
+
+def test_compat_missing_key_is_provider_unavailable():
+    llm.reset_state()
+    out, _fake, _log = call_compat("mistral", [FakeResponse(200, OK_BODY)], key="")
+    # apply_settings ignores a blank key, so none is configured at all.
+    assert isinstance(out, llm.ProviderUnavailable), out
+    assert llm.classify(out) == llm.UNUSABLE
+
+
+def test_compat_providers_are_reachable_through_the_chain():
+    """The registry is wired into routing, not just defined."""
+    for provider in llm._COMPAT:
+        assert provider in llm._GENERATORS, provider
+        assert provider in llm._ENV_KEYS, provider
+        assert provider in llm._INTERVALS, f"{provider} has no throttle interval"
+        assert llm.split_model(f"{provider}:x") == (provider, "x")
+
+
+# ---- 7. same-provider-first is a routing GUARANTEE, not a config convention -
+# The user's own words: "if my selected Gemini model is unavailable, use the
+# same Gemini API key with the next available Gemini model" — before any other
+# provider is tried, no matter how the fallback list was written or where it
+# came from (typed by hand, left over from the env default, empty).
+def test_candidates_reorders_a_cross_provider_chain():
+    """The exact bug this closes: primary=Gemini, but the CONFIGURED chain
+    (e.g. an untouched env default) lists an OpenAI model before the primary's
+    own second Gemini model. Routing must not honour that order literally."""
+    out = llm._candidates(
+        GEM_MAIN,
+        [TERRA, LUNA, FLOOR])   # openai, openai, gemini — as written
+    assert out == [GEM_MAIN, FLOOR, TERRA, LUNA], out
+
+
+def test_candidates_preserves_relative_order_within_each_provider():
+    out = llm._candidates(SOL, [TERRA, LUNA, FLOOR, GEM_MAIN])
+    # openai entries keep terra-before-luna; gemini entries keep floor-before-main
+    assert out == [SOL, TERRA, LUNA, FLOOR, GEM_MAIN], out
+
+
+def test_gemini_primary_with_the_unconfigured_env_default_stays_on_gemini():
+    """The precise scenario a blank Settings fallback box used to produce:
+    gatekeeper_model overridden to Gemini, gatekeeper_fallback_models left at
+    whatever daily.yml's cross-provider floor default is."""
+    out, log, oa, gm = run(
+        model=GEM_MAIN, fallbacks=(TERRA, LUNA, FLOOR),
+        gemini_script={bare(GEM_MAIN): busy_gemini(), bare(FLOOR): GOOD_JSON})
+    assert out == WANT, f"no briefing was produced: {out!r}"
+    assert not oa.calls, f"crossed to OpenAI while a Gemini sibling could answer: {oa.calls}"
+    assert gm.calls == [bare(GEM_MAIN)] * llm.MAX_RETRIES + [bare(FLOOR)], gm.calls
+
+
+def test_single_provider_chain_is_unaffected():
+    """No other provider configured at all — ordering is a no-op, not a crash."""
+    out = llm._candidates(GEM_MAIN, [FLOOR])
+    assert out == [GEM_MAIN, FLOOR], out
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = []

@@ -36,11 +36,10 @@ import store
 # validation and the llm hand-off cannot drift apart.
 _MODEL_FIELDS = ("gatekeeper_model", "editor_model")
 _CHAIN_FIELDS = ("gatekeeper_fallback_models", "editor_fallback_models")
-_KEY_FIELDS = {
-    "openai_api_key": llm.OPENAI,
-    "anthropic_api_key": llm.ANTHROPIC,
-    "gemini_api_key": llm.GEMINI,
-}
+# Derived from llm.PROVIDERS so a provider added there cannot be silently
+# dropped here — the column name is the provider id plus "_api_key", which is
+# exactly what migrations 004 and 005 create.
+_KEY_FIELDS = {f"{p}_api_key": p for p in llm.PROVIDERS}
 
 # Set SETTINGS_FROM_DB=0 to ignore the table entirely and run purely on env vars
 # — the way to reproduce a run locally, or to bypass a bad row without having to

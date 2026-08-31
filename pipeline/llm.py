@@ -87,6 +87,7 @@ Note on sampling params: neither provider is sent temperature/top_p/top_k. Gemin
 the schema in each prompt keep responses well-formed.
 """
 from __future__ import annotations
+import functools
 import json
 import os
 import random
@@ -96,8 +97,48 @@ import time
 
 # ---- providers ---------------------------------------------------------------
 OPENAI, ANTHROPIC, GEMINI = "openai", "anthropic", "gemini"
-PROVIDERS = (OPENAI, ANTHROPIC, GEMINI)
+
+# OPENAI-WIRE-COMPATIBLE PROVIDERS.
+# Each of these serves POST {base}/chat/completions and GET {base}/models in
+# OpenAI's request/response shape with a bearer token, so they share ONE adapter
+# (_compat_text) instead of six near-identical ones. Adding a seventh is a line
+# in this table plus a key column — no new code path, nothing new to test.
+#
+# Base URLs verified against each vendor's own compatibility documentation
+# (2026-08); they are the compatibility endpoints, which are NOT always the
+# vendor's native base — Cohere's native API is /v2/chat and is a different
+# shape entirely, and Hugging Face's router fronts many hosted models.
+_COMPAT = {
+    "groq":        {"label": "Groq",
+                    "base": "https://api.groq.com/openai/v1",
+                    "keys_url": "https://console.groq.com/keys"},
+    "cerebras":    {"label": "Cerebras",
+                    "base": "https://api.cerebras.ai/v1",
+                    "keys_url": "https://cloud.cerebras.ai"},
+    "openrouter":  {"label": "OpenRouter",
+                    "base": "https://openrouter.ai/api/v1",
+                    "keys_url": "https://openrouter.ai/keys"},
+    "mistral":     {"label": "Mistral AI",
+                    "base": "https://api.mistral.ai/v1",
+                    "keys_url": "https://console.mistral.ai/api-keys"},
+    "cohere":      {"label": "Cohere",
+                    "base": "https://api.cohere.ai/compatibility/v1",
+                    "keys_url": "https://dashboard.cohere.com/api-keys"},
+    "huggingface": {"label": "Hugging Face",
+                    "base": "https://router.huggingface.co/v1",
+                    "keys_url": "https://huggingface.co/settings/tokens"},
+}
+
+PROVIDERS = (OPENAI, ANTHROPIC, GEMINI) + tuple(_COMPAT)
 LLM_DEFAULT_PROVIDER = os.environ.get("LLM_DEFAULT_PROVIDER", OPENAI).strip().lower()
+
+
+def provider_label(provider: str) -> str:
+    """Human name for logs and the dashboard."""
+    if provider in _COMPAT:
+        return _COMPAT[provider]["label"]
+    return {OPENAI: "OpenAI", ANTHROPIC: "Anthropic",
+            GEMINI: "Gemini"}.get(provider, provider)
 
 # Credentials resolve through api_key(), NOT os.environ directly, so the
 # dashboard's Settings tab can supply them (settings.apply -> apply_settings)
@@ -110,6 +151,9 @@ _ENV_KEYS = {
     OPENAI: "OPENAI_API_KEY",
     ANTHROPIC: "ANTHROPIC_API_KEY",
     GEMINI: "GEMINI_API_KEY",
+    # HUGGINGFACE_API_KEY, GROQ_API_KEY, ... — derived so the table cannot drift
+    # out of step with _COMPAT when a provider is added.
+    **{p: f"{p.upper()}_API_KEY" for p in _COMPAT},
 }
 _API_KEYS: dict[str, str] = {}
 
@@ -192,6 +236,18 @@ def split_model(model_id: str) -> tuple[str, str]:
         return ANTHROPIC, raw
     if low.startswith(("gemini", "models/gemini")):
         return GEMINI, raw
+    # Vendor-owned name prefixes, safe to infer.
+    if low.startswith(("mistral-", "ministral-", "magistral-", "codestral-",
+                       "devstral-")):
+        return "mistral", raw
+    if low.startswith("command"):
+        return "cohere", raw
+    # EVERY OTHER COMPAT PROVIDER REQUIRES ITS PREFIX. Groq, Cerebras,
+    # OpenRouter and Hugging Face all serve models they did not train
+    # ("llama-3.3-70b", "deepseek-ai/DeepSeek-V4"), and the same id is often
+    # available on several of them — so the name cannot identify the host, and
+    # guessing would silently bill the wrong account. The dashboard always
+    # writes prefixed ids; this only matters for hand-written env vars.
     return LLM_DEFAULT_PROVIDER, raw
 
 
@@ -266,7 +322,18 @@ class ProviderUnavailable(LlmError):
 # An explicit LLM_MIN_INTERVAL applies to both providers; the per-provider vars
 # override it. The Gemini default stays at the free-tier-safe 13s so the
 # last-resort fallback cannot 429 itself the moment it is called.
-_INTERVAL_DEFAULTS = {OPENAI: "1", ANTHROPIC: "1", GEMINI: "13"}
+# Conservative per-provider spacing. The compat providers mostly meter free tiers
+# by requests-per-minute, so these are floors that keep a run inside them without
+# being asked; every one is overridable with <PROVIDER>_MIN_INTERVAL.
+_INTERVAL_DEFAULTS = {
+    OPENAI: "1", ANTHROPIC: "1", GEMINI: "13",
+    "groq": "2",         # free tier meters RPM per model
+    "cerebras": "2",
+    "openrouter": "1",   # paid credits; the upstream model sets the real limit
+    "mistral": "1",
+    "cohere": "3",       # trial keys are the tightest of the set
+    "huggingface": "2",
+}
 LLM_MIN_INTERVAL = os.environ.get("LLM_MIN_INTERVAL")
 _INTERVALS = {
     p: float(os.environ.get(f"{p.upper()}_MIN_INTERVAL",
@@ -333,11 +400,28 @@ def _is_dead(model: str) -> bool:
 def _candidates(model: str, fallback_models: list[str] | None) -> list[str]:
     """Preferred model first, then fallbacks; minus what cannot answer right now.
 
-    Two filters, in order of permanence:
+    THE SAME PROVIDER AS THE PRIMARY IS ALWAYS TRIED FIRST, regardless of the
+    order the fallback list happens to be written in. This is a hard guarantee
+    at the routing layer, not a convention the config has to get right: a
+    Gemini primary must exhaust its OWN key's other models before this process
+    ever calls a different vendor. Enforcing it here, rather than only asking
+    the dashboard to write a same-provider-first chain, closes a real gap that
+    config alone could not: `gatekeeper_model` can be overridden (Gemini) while
+    `gatekeeper_fallback_models` stays unset, in which case the value in effect
+    is still the OPENAI-anchored env default from daily.yml — which used to put
+    an OpenAI hop before the primary's own second Gemini model. Reordering here
+    fixes that regardless of which layer produced the fallback list.
+
+    Two further filters, in order of permanence:
       - dead: no key, unknown id -> dropped entirely (it cannot succeed today)
       - cooling: 503'd moments ago -> skipped, ADVISORY. If the filters would
         empty the list, cooling is ignored, because trying a maybe-busy model
-        always beats not calling at all.
+        always beats not calling at all. This can still let a cooling
+        same-provider model be passed over for a healthy other-provider one —
+        deliberately: cooling is a short-lived (120s) skip against re-hitting a
+        model that JUST 503'd, not a claim the provider is down, and waiting
+        out 120s when something else can answer THIS request now is not what
+        "stay within the provider" is protecting against.
     """
     ordered = [model] + [m for m in (fallback_models or []) if m and m != model]
     ordered = [_resolve(m) for m in ordered]
@@ -346,6 +430,13 @@ def _candidates(model: str, fallback_models: list[str] | None) -> list[str]:
         if m not in seen:
             seen.add(m)
             unique.append(m)
+
+    if unique:
+        primary_provider = split_model(unique[0])[0]
+        same = [m for m in unique if split_model(m)[0] == primary_provider]
+        other = [m for m in unique if split_model(m)[0] != primary_provider]
+        unique = same + other            # stable within each group
+
     alive = [m for m in unique if not _is_dead(m)]
     live = [m for m in alive if not _cooling(m)]
     return live or alive or unique
@@ -491,6 +582,7 @@ def reset_state() -> None:
     global _AVAILABLE_IDS
     _AVAILABLE_IDS = None
     _API_KEYS.clear()          # settings-supplied credentials are per-run too
+    _NO_JSON_MODE.clear()      # json-mode support is re-probed each run
     with _route_lock:
         _BUSY_UNTIL.clear()
         _DEAD_MODELS.clear()
@@ -1002,6 +1094,106 @@ def _anthropic_text(model: str, system_prompt: str, user_payload: str,
     return text, usage
 
 
+# ---- providers: OpenAI-compatible (Groq, Cerebras, OpenRouter, ...) ----------
+# One adapter for every entry in _COMPAT. Raw REST for the same reason as the
+# Anthropic adapter: one POST, no streaming, no tools, and `requests` is already
+# a dependency. Using the OpenAI SDK per provider would mean six clients whose
+# only difference is a base_url.
+_COMPAT_TIMEOUT = int(os.environ.get("COMPAT_TIMEOUT", "180"))
+
+
+class _CompatError(RuntimeError):
+    """Carries the HTTP status so classify() can route it like any SDK error."""
+
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+# Providers/models that reject response_format are remembered for the rest of the
+# run, so the cost of discovering it is one wasted request per model, not one per
+# batch. Session-only, like every other routing fact in this module.
+_NO_JSON_MODE: set[str] = set()
+
+
+def _compat_text(provider: str, model: str, system_prompt: str,
+                 user_payload: str, max_tokens: int) -> tuple[str, dict | None]:
+    """One chat-completion against an OpenAI-compatible endpoint.
+
+    JSON MODE IS OPTIONAL HERE, unlike on OpenAI itself. These endpoints are
+    compatible at the wire level but not uniformly in their features: whether
+    `response_format: json_object` is honoured depends on the upstream model,
+    which for OpenRouter and Hugging Face is not even the same vendor twice. So
+    it is requested, and a 400 that names it retries once without it rather than
+    failing the model. The prompts carry their schema and _extract_json tolerates
+    prose either way — json_object is an optimisation, never the thing we rely on.
+    """
+    import requests   # local: a missing dependency stays a ProviderUnavailable
+
+    key = api_key(provider)
+    if not key:
+        raise ProviderUnavailable(
+            f"no {provider_label(provider)} key — set one in the dashboard's "
+            f"Settings tab, or expose {_ENV_KEYS[provider]} to the workflow step")
+
+    base = _COMPAT[provider]["base"]
+    cache_key = f"{provider}:{model}"
+    body = {
+        "model": model,
+        "messages": [{"role": "system", "content": system_prompt},
+                     {"role": "user", "content": user_payload}],
+        "max_tokens": max_tokens,
+    }
+    if cache_key not in _NO_JSON_MODE:
+        body["response_format"] = {"type": "json_object"}
+
+    for attempt in range(2):                  # at most one json-mode correction
+        try:
+            resp = requests.post(
+                f"{base}/chat/completions",
+                headers={"Content-Type": "application/json",
+                         "Authorization": f"Bearer {key}"},
+                data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+                timeout=_COMPAT_TIMEOUT)
+        except requests.RequestException as exc:
+            raise _CompatError(
+                f"{provider_label(provider)} request failed: {exc}") from exc
+
+        if resp.ok:
+            break
+
+        detail = resp.text.strip()[:400]
+        low = detail.lower()
+        if (attempt == 0 and resp.status_code == 400
+                and "response_format" in body
+                and ("response_format" in low or "json_object" in low
+                     or "json mode" in low)):
+            _NO_JSON_MODE.add(cache_key)
+            body.pop("response_format")
+            _event(f"{cache_key}: does not accept response_format — retrying "
+                   f"without it (the prompt's schema still applies)")
+            continue
+        raise _CompatError(
+            f"{resp.status_code} {provider_label(provider)} request failed: "
+            f"{detail}", resp.status_code)
+    else:
+        raise _CompatError(f"{provider_label(provider)}: exhausted corrections")
+
+    data = resp.json()
+    choices = data.get("choices") or []
+    text = ""
+    if choices:
+        text = ((choices[0].get("message") or {}).get("content") or "")
+
+    u = data.get("usage") or {}
+    prompt = int(u.get("prompt_tokens") or 0)
+    completion = int(u.get("completion_tokens") or 0)
+    total = int(u.get("total_tokens") or 0) or (prompt + completion)
+    usage = ({"prompt": prompt, "completion": completion,
+              "reasoning": 0, "total": total} if total else None)
+    return text, usage
+
+
 # ---- provider: Gemini --------------------------------------------------------
 _client = None          # kept at this name: tests inject a fake here
 _genai_types = None
@@ -1070,6 +1262,9 @@ _GENERATORS = {
     OPENAI: _openai_text,
     ANTHROPIC: _anthropic_text,
     GEMINI: _gemini_text,
+    # partial() binds the provider so every compat entry presents the identical
+    # (model, system, user, max_tokens) signature as the three native adapters.
+    **{p: functools.partial(_compat_text, p) for p in _COMPAT},
 }
 
 

@@ -77,10 +77,48 @@ runs. The workflow file no longer carries model configuration at all.
 > Changes apply to the **next** scheduled run. Nothing in the dashboard regenerates
 > today's briefing — the pipeline is a cron job, not a live service.
 
-Three providers are supported — **OpenAI**, **Anthropic** and **Google Gemini**. Every
-model id is provider-prefixed (`openai:` / `anthropic:` / `gemini:`), so one ordered list
-can cross providers and the whole chain stays a single code path. An unprefixed id is
-inferred from its name (`gpt-*` → OpenAI, `claude-*` → Anthropic, `gemini-*` → Gemini).
+**Nine providers** are supported, each fully independent: its own API key, its own
+model list, its own row in every failover chain, its own column in `app_settings`. Every
+model id is provider-prefixed, so one ordered list can cross providers and the whole
+chain stays a single code path.
+
+| Provider | Prefix | Endpoint | HTTP shape |
+| --- | --- | --- | --- |
+| OpenAI | `openai:` | `api.openai.com/v1` | its own (SDK, Responses + chat) |
+| Anthropic | `anthropic:` | `api.anthropic.com/v1` | its own (`/messages`) |
+| Google Gemini | `gemini:` | `generativelanguage.googleapis.com` | its own (`google-genai`) |
+| Groq | `groq:` | `api.groq.com/openai/v1` | OpenAI-shaped request/response |
+| Cerebras | `cerebras:` | `api.cerebras.ai/v1` | OpenAI-shaped request/response |
+| OpenRouter | `openrouter:` | `openrouter.ai/api/v1` | OpenAI-shaped request/response |
+| Mistral AI | `mistral:` | `api.mistral.ai/v1` | OpenAI-shaped request/response |
+| Cohere | `cohere:` | `api.cohere.ai/compatibility/v1` | OpenAI-shaped request/response |
+| Hugging Face | `huggingface:` | `router.huggingface.co/v1` | OpenAI-shaped request/response |
+
+**"OpenAI-shaped" describes wire format only, not identity.** Groq, Cerebras,
+OpenRouter, Mistral, Cohere and Hugging Face each happen to accept a request body and
+return a response body in the same JSON shape OpenAI's API popularized — the way two
+unrelated websites both happening to speak HTTP doesn't make them the same website.
+Nothing about a key, a model, or a setting is shared between them: `keyCfg`/`app_settings`
+column, model list (each discovered from that vendor's own key), and chain entry are all
+per-provider, identical in kind to OpenAI/Anthropic/Gemini's own rows above. The *only*
+practical consequence is internal: those six share one function
+(`llm._compat_text`) that builds the same request shape with a different `base_url` and
+key, instead of six copies of near-identical code. Adding a seventh such provider is a
+row in `llm._COMPAT`, a matching entry in `docs/script.js`'s `PROVIDERS`, and a key
+column — never a change to how any *existing* provider's key or models behave. Note the
+base URLs above are the vendors' *compatibility* endpoints, which are not always their
+native ones: Cohere's own API is `/v2/chat` and a different shape entirely.
+
+`json_object` mode is requested but **not** relied on — for OpenRouter and Hugging Face
+the upstream model is not even the same vendor twice, so a 400 naming `response_format`
+retries once without it (remembered per model for the run). The prompts carry their
+schema and `_extract_json` tolerates prose, which is the real guarantee.
+
+An unprefixed id is inferred only where the name is vendor-owned (`gpt-*` → OpenAI,
+`claude-*` → Anthropic, `gemini-*` → Gemini, `mistral-*` → Mistral, `command*` → Cohere).
+**Everything else needs its prefix**: Groq, Cerebras, OpenRouter and Hugging Face all
+serve models they did not train, the same id is often on several of them, so the name
+cannot identify the host and guessing would bill the wrong account.
 
 | Setting | Column | Meaning |
 | --- | --- | --- |
@@ -239,6 +277,26 @@ instead (`QuotaFailure` / `quotaMetric` / `rate_limit_exceeded` vs. `insufficien
 `test_llm_fallback.py` pins all four behaviours, including a guard against
 over-correcting the other way.
 
+#### Same-provider-first is a routing guarantee, not a config convention
+**The primary's own provider is always exhausted before any other is tried — enforced by
+`llm._candidates()`, not by hoping the fallback list happens to be written in the right
+order.** If the gatekeeper's primary is `gemini:gemini-3.5-flash` and its configured
+fallback chain is `[openai:gpt-5.6-terra, gemini:gemini-3.1-flash-lite]` (OpenAI listed
+first), the router still calls `gemini:gemini-3.1-flash-lite` before it ever calls
+OpenAI. Candidates are stable-partitioned by provider — same-provider entries first,
+in their original relative order, then everything else — *before* the existing
+dead/cooling filters run.
+
+This closes a real gap, not a theoretical one: `gatekeeper_model` can be overridden to
+Gemini via the dashboard while `gatekeeper_fallback_models` is left empty, in which case
+the value actually in effect is still `daily.yml`'s env default — which lists two OpenAI
+models before any second Gemini one. Without the reorder, a Gemini-primary run would
+cross to OpenAI on the very first failure. The dashboard's Settings tab also auto-fills
+an empty chain with same-provider siblings the moment Refresh has run, so the box itself
+is rarely empty in practice — but the guarantee lives in the router, not the UI, so it
+holds even for a hand-edited chain, an untouched env default, or a future caller that
+doesn't go through the dashboard at all.
+
 ### Never publish over a good briefing
 `briefings` holds the only copy of a day's briefing and `dispatch.py` upserts by date,
 so an empty result must never be allowed to overwrite it. The pipeline aborts (exit 75, `dispatch` never runs) when:
@@ -293,8 +351,9 @@ cd pipeline && python test_settings.py            # dashboard settings -> model 
 ## One-time setup
 1. **Create the Supabase project** (or reuse one), then run the migrations in
    `supabase/migrations/` in order — `001` provisions the tables, `004` adds
-   `app_settings` and closes the dashboard to `anon`. Add the `news_aggregator`
-   schema under Project Settings → Data API → Exposed schemas.
+   `app_settings` and closes the dashboard to `anon`, `005` adds the six
+   OpenAI-compatible provider key columns. Add the `news_aggregator` schema under
+   Project Settings → Data API → Exposed schemas.
 2. **Copy both keys** from Project Settings → API: the **publishable** key for the
    dashboard and the `service_role` key for the pipeline.
 3. **Create the dashboard user.** Authentication → Users → *Add user*. This is the

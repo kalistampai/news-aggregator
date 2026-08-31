@@ -23,7 +23,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=2026-08-30a" />
+  <link rel="stylesheet" href="style.css?v=2026-08-30d" />
 </head>
 <!-- STARTS LOCKED, with the gate itself still hidden — deliberately a blank
      page for the moment boot() takes to check the session. The alternative
@@ -31,7 +31,7 @@
      before the gate covers it, which flashes the previous reader's briefing at
      whoever opens the laptop next. boot() then either showGate() or
      hideGate()+startApp(); neither state is reachable before that decision. -->
-<body class="is-locked" data-build="2026-08-30a">
+<body class="is-locked" data-build="2026-08-30d">
   <noscript>
     <p style="max-width:34rem;margin:18vh auto;padding:0 1.5rem;
               font:14px/1.6 system-ui,sans-serif;color:#a8b6c4;text-align:center">
@@ -312,44 +312,17 @@
         <section class="set">
           <h3 class="set__h">Provider keys</h3>
           <p class="set__help">
-            Stored in Supabase and read by the pipeline at run time. All three
-            matter, not just the active one: the failover chain crosses
-            providers, so a key here is what lets the run recover when another
-            provider is down.
+            Stored in Supabase and read by the pipeline at run time.
+            <b>Every provider stays visible on purpose</b> &mdash; the failover
+            chain crosses providers, so the keys you are <em>not</em> using right
+            now are exactly the ones that rescue a run when your primary is
+            capped. The highlighted row is the provider selected below. A filled
+            dot means a key is stored; the value is never shown back as a
+            masked preview, which invites reading a real key off a shared screen.
           </p>
-
-          <label class="set__field">
-            <span class="set__label">OpenAI <i class="set__dot" id="dotOpenai"></i></span>
-            <span class="set__reveal">
-              <input type="password" id="keyOpenai" placeholder="sk-…"
-                     autocomplete="off" spellcheck="false" />
-              <button type="button" class="set__eye" data-reveal="keyOpenai"
-                      title="Show / hide">&#128065;</button>
-            </span>
-            <span class="set__hint">platform.openai.com/api-keys</span>
-          </label>
-
-          <label class="set__field">
-            <span class="set__label">Anthropic <i class="set__dot" id="dotAnthropic"></i></span>
-            <span class="set__reveal">
-              <input type="password" id="keyAnthropic" placeholder="sk-ant-…"
-                     autocomplete="off" spellcheck="false" />
-              <button type="button" class="set__eye" data-reveal="keyAnthropic"
-                      title="Show / hide">&#128065;</button>
-            </span>
-            <span class="set__hint">console.anthropic.com/settings/keys</span>
-          </label>
-
-          <label class="set__field">
-            <span class="set__label">Gemini <i class="set__dot" id="dotGemini"></i></span>
-            <span class="set__reveal">
-              <input type="password" id="keyGemini" placeholder="AIza…"
-                     autocomplete="off" spellcheck="false" />
-              <button type="button" class="set__eye" data-reveal="keyGemini"
-                      title="Show / hide">&#128065;</button>
-            </span>
-            <span class="set__hint">aistudio.google.com/apikey</span>
-          </label>
+          <!-- Rows are generated from the PROVIDERS registry in script.js so a
+               provider cannot exist in one file and not the other. -->
+          <div id="providerKeys"></div>
         </section>
 
         <section class="set">
@@ -363,11 +336,8 @@
           <label class="set__field">
             <span class="set__label">Provider</span>
             <span class="set__row">
-              <select id="setProvider">
-                <option value="openai">OpenAI</option>
-                <option value="anthropic">Anthropic (Claude)</option>
-                <option value="gemini">Gemini</option>
-              </select>
+              <!-- Options generated from the same registry as the key rows. -->
+              <select id="setProvider"></select>
               <button type="button" class="set__btn" id="refreshModels"
                       title="List models this key can use">Refresh</button>
             </span>
@@ -376,48 +346,110 @@
             </span>
           </label>
 
+          <!-- Each stage keeps a "Custom…" escape hatch. Several of these
+               providers do not send CORS headers on /models, so browser-side
+               discovery can legitimately fail against a perfectly good key —
+               typing the exact id must stay possible or that provider becomes
+               unusable from this screen. -->
           <label class="set__field">
             <span class="set__label">Gatekeeper model</span>
             <select id="setGatekeeper"></select>
+            <input type="text" id="setGatekeeperCustom" hidden spellcheck="false"
+                   autocomplete="off" placeholder="exact model id" />
           </label>
 
           <label class="set__field">
             <span class="set__label">Editor model</span>
             <select id="setEditor"></select>
+            <input type="text" id="setEditorCustom" hidden spellcheck="false"
+                   autocomplete="off" placeholder="exact model id" />
           </label>
+
+          <!-- Provider-specific tuning. Shown only for the provider it belongs
+               to — a reasoning-effort control has no meaning under Gemini. -->
+          <label class="set__field" data-provider="openai">
+            <span class="set__label">Reasoning effort</span>
+            <select id="setEffort">
+              <option value="low">low — scoring and summarising (default)</option>
+              <option value="medium">medium</option>
+              <option value="high">high — costs output tokens</option>
+            </select>
+            <span class="set__hint">
+              OpenAI GPT-5.x only. Reasoning tokens bill as output, so raise this
+              only if card quality disappoints. Applies to OpenAI models wherever
+              they sit in the chain.
+            </span>
+          </label>
+
+          <p class="set__note" data-provider="anthropic">
+            Anthropic exposes no extra tuning here — model choice is the control.
+          </p>
+          <p class="set__note" data-provider="gemini">
+            Gemini exposes no extra tuning here. Note its free tier meters quota
+            <b>per model</b>, which is why a second Gemini model in the chain
+            below is worth more than any setting on this screen.
+          </p>
+          <!-- Each provider below has its own key, its own model list, and its
+               own row in the failover chain — this note is only a per-vendor
+               gotcha worth flagging where it will actually be read. -->
+          <p class="set__note" data-provider="groq">
+            Groq's free tier meters <b>per model, per minute</b>, so a second
+            Groq model in the chain (auto-filled after Refresh) is what carries
+            you through a spike, not a different provider.
+          </p>
+          <p class="set__note" data-provider="cerebras">
+            Cerebras' model catalogue is small and changes often — press
+            Refresh rather than typing a remembered id.
+          </p>
+          <p class="set__note" data-provider="openrouter">
+            OpenRouter is itself a router in front of many vendors' models, so
+            its ids carry a vendor prefix (<code>deepseek-ai/DeepSeek-V4</code>).
+            One OpenRouter key can reach many underlying models — Refresh lists
+            what your account can use.
+          </p>
+          <p class="set__note" data-provider="mistral">
+            No extra tuning here — model choice is the control.
+          </p>
+          <p class="set__note" data-provider="cohere">
+            Trial keys are rate-limited hard — pair your Command model with a
+            second Cohere model, or expect frequent waits on a free key.
+          </p>
+          <p class="set__note" data-provider="huggingface">
+            Hugging Face routes to many hosted models under one token; ids look
+            like <code>meta-llama/Llama-4:together</code>. Use a token with
+            inference permission.
+          </p>
         </section>
 
         <section class="set">
           <h3 class="set__h">Failover chains <span class="set__tag">advanced</span></h3>
           <p class="set__help">
             Tried in order when the primary is overloaded, capped or out of
-            credit. Comma-separated, each id provider-prefixed
-            (<code>openai:gpt-5.6-terra</code>).
+            credit — using <b>that same provider's own API key</b>, never a
+            different one, until every model on this list is exhausted. This is
+            enforced by the pipeline itself: even a chain written with another
+            provider's model in it will still try every model of the primary's
+            own provider first. Comma-separated, each id provider-prefixed
+            (<code>gemini:gemini-3.1-flash-lite</code>).
           </p>
           <p class="set__help">
-            <b>List two or more models from the same provider.</b> Quotas are
-            metered per model, so the most likely overnight failure — one model
-            hitting its own cap — is fixed by the next model on the
-            <em>same key</em>, with no second vendor needed. Add a different
-            provider after those to cover an outage or a dry account.
+            <b>Filled in automatically</b> with the other models your key can
+            see, right after you press Refresh above — nothing to type for the
+            common case. Edit it if you want fewer models tried, a different
+            order, or (optional) a different provider added at the end as a
+            last resort after this one is fully exhausted.
           </p>
           <label class="set__field">
             <span class="set__label">Gatekeeper fallbacks</span>
             <input type="text" id="setGatekeeperChain" spellcheck="false"
-                   autocomplete="off" placeholder="gemini:gemini-3.1-flash-lite, openai:gpt-5.6-terra" />
+                   autocomplete="off"
+                   placeholder="press Refresh above to fill this in" />
           </label>
           <label class="set__field">
             <span class="set__label">Editor fallbacks</span>
             <input type="text" id="setEditorChain" spellcheck="false"
-                   autocomplete="off" placeholder="gemini:gemini-3.1-flash-lite, openai:gpt-5.6-terra" />
-          </label>
-          <label class="set__field">
-            <span class="set__label">OpenAI reasoning effort</span>
-            <select id="setEffort">
-              <option value="low">low — scoring and summarising (default)</option>
-              <option value="medium">medium</option>
-              <option value="high">high — costs output tokens</option>
-            </select>
+                   autocomplete="off"
+                   placeholder="press Refresh above to fill this in" />
           </label>
         </section>
 
@@ -446,6 +478,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.111.0/dist/umd/supabase.min.js"
           integrity="sha384-fPWur1rx/DE6YtXP/x0MD6dd90RgnVsz5yX/DIg7CcVAnTBZsENWuIcpvVTM39ti"
           crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script src="script.js?v=2026-08-30a"></script>
+  <script src="script.js?v=2026-08-30d"></script>
 </body>
 </html>

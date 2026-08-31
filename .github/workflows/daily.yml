@@ -91,9 +91,18 @@ jobs:
           # environment — and with no key anywhere, there is no briefing at all.
           # llm.api_key() prefers the stored value and falls back to these, so a
           # secret that is set but stale is harmless. Safe to leave unset.
-          OPENAI_API_KEY:    ${{ secrets.OPENAI_API_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          GEMINI_API_KEY:    ${{ secrets.GEMINI_API_KEY }}
+          OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY:   ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY:      ${{ secrets.GEMINI_API_KEY }}
+          # OpenAI-compatible providers, same backstop rule. An unset secret is
+          # an empty string, which api_key() treats as "not configured" — so
+          # leaving every one of these blank is the normal case.
+          GROQ_API_KEY:        ${{ secrets.GROQ_API_KEY }}
+          CEREBRAS_API_KEY:    ${{ secrets.CEREBRAS_API_KEY }}
+          OPENROUTER_API_KEY:  ${{ secrets.OPENROUTER_API_KEY }}
+          MISTRAL_API_KEY:     ${{ secrets.MISTRAL_API_KEY }}
+          COHERE_API_KEY:      ${{ secrets.COHERE_API_KEY }}
+          HUGGINGFACE_API_KEY: ${{ secrets.HUGGINGFACE_API_KEY }}
 
           # ---- model chain: DEFAULTS ONLY ----------------------------------
           # Used only when app_settings has no value for a field (a fresh
