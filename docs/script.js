@@ -43,7 +43,7 @@ const CONFIG = {
    <body data-build>. A mismatch means one of the two files is stale — usually a
    cached script.js on GitHub Pages — which is exactly how a removed control ends
    up referenced by old code and throws "Cannot set properties of null". */
-const BUILD = "2026-11-05a";
+const BUILD = "2026-11-05b";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -1926,6 +1926,11 @@ function stageProvider(selectSel, customSel) {
 // deliberately no hardcoded per-vendor list, so a suggestion is never stale
 // against what the key can actually see today.
 function siblingModels(provider, excludeFull) {
+  // OmniRoute is a router, not a vendor: its catalogue is every model of every
+  // upstream (1,000+), and a combo already carries its own fallback order. A
+  // suggested chain of "everything else" would make a failed combo walk the
+  // whole catalogue, so nothing is suggested — type a chain by hand if wanted.
+  if (provider === "omniroute") return [];
   const ids = (DISCOVERED[provider] || []).filter(isChatId);
   return ids
     .map((id) => `${provider}:${id}`)
