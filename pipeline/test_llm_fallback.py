@@ -707,11 +707,12 @@ def test_a_bad_key_still_kills_the_whole_provider():
 # _compat_text. One adapter means one place to get it wrong, so these pin the
 # parts that differ per vendor: the URL called, and whether json mode is taken.
 class FakeResponse:
-    def __init__(self, status=200, payload=None, text=""):
+    def __init__(self, status=200, payload=None, text="", headers=None):
         self.status_code = status
         self.ok = 200 <= status < 300
         self._payload = payload or {}
         self.text = text or json.dumps(self._payload)
+        self.headers = headers or {}
 
     def json(self):
         return self._payload
@@ -775,6 +776,7 @@ def test_every_compat_provider_hits_its_own_base_url():
         "mistral": "https://api.mistral.ai/v1",
         "cohere": "https://api.cohere.ai/compatibility/v1",
         "huggingface": "https://router.huggingface.co/v1",
+        "omniroute": "https://omni.kalistamp.lol/v1",
     }
     assert set(expected) == set(llm._COMPAT), \
         f"provider set changed: {sorted(set(expected) ^ set(llm._COMPAT))}"
@@ -784,6 +786,34 @@ def test_every_compat_provider_hits_its_own_base_url():
         url, headers, _body = fake.calls[0]
         assert url == f"{base}/chat/completions", (provider, url)
         assert headers["Authorization"] == "Bearer k-test", (provider, headers)
+
+
+def test_omniroute_combo_id_routes_to_omniroute_unchanged():
+    """'omniroute:<combo>' must reach OmniRoute with the bare combo name."""
+    assert llm.split_model("omniroute:news-free") == ("omniroute", "news-free")
+    out, fake, _ = call_compat("omniroute", [FakeResponse(200, OK_BODY)],
+                               model="news-free")
+    assert out[0] == GOOD_JSON, out
+    assert fake.calls[0][2]["model"] == "news-free", fake.calls[0][2]
+
+
+def test_omniroute_fallback_is_logged():
+    """A combo that fell back answers 200; the hop must still reach the log."""
+    llm.reset_state()
+    hdrs = {"X-OmniRoute-Fallback-Attempts": "2",
+            "X-OmniRoute-Decision": "strategy=priority; provider=gemini; latency_ms=900"}
+    out, _fake, _ = call_compat("omniroute", [FakeResponse(200, OK_BODY, headers=hdrs)],
+                                model="news-free")
+    assert out[0] == GOOD_JSON, out
+    assert any("fell back 2x" in e and "provider=gemini" in e
+               for e in llm._EVENTS), llm._EVENTS
+
+
+def test_omniroute_first_choice_logs_nothing():
+    llm.reset_state()
+    hdrs = {"X-OmniRoute-Fallback-Attempts": "0"}
+    call_compat("omniroute", [FakeResponse(200, OK_BODY, headers=hdrs)], model="news-free")
+    assert not any("fell back" in e for e in llm._EVENTS), llm._EVENTS
 
 
 def test_compat_reports_usage():

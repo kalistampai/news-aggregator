@@ -23,7 +23,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=2026-08-30e" />
+  <link rel="stylesheet" href="style.css?v=2026-11-05a" />
 </head>
 <!-- STARTS LOCKED, with the gate itself still hidden — deliberately a blank
      page for the moment boot() takes to check the session. The alternative
@@ -31,7 +31,7 @@
      before the gate covers it, which flashes the previous reader's briefing at
      whoever opens the laptop next. boot() then either showGate() or
      hideGate()+startApp(); neither state is reachable before that decision. -->
-<body class="is-locked" data-build="2026-08-30e">
+<body class="is-locked" data-build="2026-11-05a">
   <noscript>
     <p style="max-width:34rem;margin:18vh auto;padding:0 1.5rem;
               font:14px/1.6 system-ui,sans-serif;color:#a8b6c4;text-align:center">
@@ -352,6 +352,7 @@
             <span class="set__hint" id="discoveryHint">
               Add the key above, then Refresh to list the models it can use.
             </span>
+            <span class="set__hint" id="setGatekeeperCombo" hidden></span>
           </label>
 
           <label class="set__field">
@@ -359,6 +360,7 @@
             <select id="setEditor"></select>
             <input type="text" id="setEditorCustom" hidden spellcheck="false"
                    autocomplete="off" placeholder="exact model id" />
+            <span class="set__hint" id="setEditorCombo" hidden></span>
           </label>
 
           <!-- Provider-specific tuning. Shown only for the provider it belongs
@@ -481,6 +483,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.111.0/dist/umd/supabase.min.js"
           integrity="sha384-fPWur1rx/DE6YtXP/x0MD6dd90RgnVsz5yX/DIg7CcVAnTBZsENWuIcpvVTM39ti"
           crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <script src="script.js?v=2026-08-30e"></script>
+  <script src="script.js?v=2026-11-05a"></script>
 </body>
 </html>

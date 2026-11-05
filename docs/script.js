@@ -43,7 +43,7 @@ const CONFIG = {
    <body data-build>. A mismatch means one of the two files is stale — usually a
    cached script.js on GitHub Pages — which is exactly how a removed control ends
    up referenced by old code and throws "Cannot set properties of null". */
-const BUILD = "2026-08-30e";
+const BUILD = "2026-11-05a";
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -1546,6 +1546,55 @@ function openAiStyleDiscover(base) {
   };
 }
 
+/* OmniRoute is the self-hosted router on ks2, reached through the
+   omni.kalistamp.lol proxy (only /v1/models, /v1/combos and
+   /v1/chat/completions pass). Mirrors llm._COMPAT["omniroute"]. A combo is a
+   fallback chain OmniRoute walks by itself, so the pipeline sees ONE model id
+   ("omniroute:<combo>") and the chain order lives in OmniRoute, not here. */
+const OMNIROUTE_BASE = "https://omni.kalistamp.lol/v1";
+let OMNI_COMBOS = {};            // combo name -> {strategy, models}, this session only
+
+async function omnirouteGet(key, path) {
+  const r = await fetch(`${OMNIROUTE_BASE}${path}`, {
+    headers: { Authorization: `Bearer ${key}` },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j?.error?.message || j?.message || `HTTP ${r.status}`);
+  return j.data || [];
+}
+
+/* Combos first (they are what this provider is for), then plain models.
+   /v1/combos is newer than /v1/models, so an OmniRoute without it still lists
+   its models instead of failing discovery outright. */
+async function omnirouteDiscover(key) {
+  const [combos, models] = await Promise.all([
+    omnirouteGet(key, "/combos").catch(() => []),
+    omnirouteGet(key, "/models"),
+  ]);
+  OMNI_COMBOS = {};
+  for (const c of combos) if (c && c.name) OMNI_COMBOS[c.name] = c;
+  const ids = Object.keys(OMNI_COMBOS);
+  for (const m of models) if (m?.id && !OMNI_COMBOS[m.id]) ids.push(m.id);
+  return ids;
+}
+
+/* "1. groq/llama-3.3-70b → 2. gemini/gemini-3.5-flash" for one combo, or ""
+   when the value is not a known OmniRoute combo. */
+function comboChainText(full) {
+  const i = (full || "").indexOf(":");
+  if (i <= 0 || full.slice(0, i) !== "omniroute") return "";
+  const combo = OMNI_COMBOS[full.slice(i + 1)];
+  if (!combo) return "";
+  const steps = (combo.models || []).map((s, n) => {
+    const name = s.kind === "combo-ref" ? `combo ${s.comboName}`
+      : (s.providerId && !String(s.model).startsWith(`${s.providerId}/`)
+        ? `${s.providerId}/${s.model}` : s.model);
+    return `${n + 1}. ${name}`;
+  });
+  return `OmniRoute combo (${combo.strategy || "priority"}): ` +
+         (steps.join(" → ") || "no steps");
+}
+
 /* THE registry. Key rows and the provider dropdown are both generated from it,
    so a provider cannot exist in the markup and not in the code (or vice versa).
    `column` mirrors the app_settings column names created by migrations 004/005,
@@ -1631,6 +1680,13 @@ const PROVIDERS = {
     placeholder: "hf_…",
     discover: openAiStyleDiscover("https://router.huggingface.co/v1"),
   },
+  omniroute: {
+    label: "OmniRoute",
+    // No public dashboard: it is reachable only from inside the network.
+    keysNote: "your OmniRoute dashboard (API Keys)",
+    placeholder: "sk-…",
+    discover: omnirouteDiscover,
+  },
 };
 
 // Derived, never hand-written: one source of truth for ids across markup,
@@ -1673,8 +1729,9 @@ function renderProviderControls() {
           `title="Show / hide">&#128065;</button>` +
       `</span>` +
       `<span class="set__hint">Key from ` +
-        `<a href="https://${escapeHtml(p.keysUrl)}" target="_blank" ` +
-        `rel="noopener noreferrer">${escapeHtml(p.keysUrl)}</a>. ` +
+        (p.keysNote ? escapeHtml(p.keysNote)
+          : `<a href="https://${escapeHtml(p.keysUrl)}" target="_blank" ` +
+            `rel="noopener noreferrer">${escapeHtml(p.keysUrl)}</a>`) + `. ` +
         `Stored in Supabase and read by the pipeline at run time.</span>`;
     host.appendChild(row);
   }
@@ -1690,6 +1747,10 @@ const NON_CHAT = new RegExp(
   "moderation|moderations|guard|safety|realtime|search|rerank|similarity|" +
   "edit|edits|instruct|codex|ada|babbage|curie|davinci|aqa|gemma|learnlm)" +
   "([-_./]|$)", "i");
+
+// A known OmniRoute combo is always a chat target, even when its name happens
+// to contain a NON_CHAT word ("search-backup", "vision-free").
+const isChatId = (id) => Boolean(id) && (Boolean(OMNI_COMBOS[id]) || !NON_CHAT.test(id));
 
 let SETTINGS = null;             // the row as last read/saved
 let DISCOVERED = {};             // provider -> [model id], this session only
@@ -1803,7 +1864,7 @@ function syncProviderUI(provider = el("#setProvider").value) {
 function fillModelSelect(sel, current, provider, customSel) {
   const node = $(sel);
   if (!node) return;
-  const ids = (DISCOVERED[provider] || []).filter((id) => id && !NON_CHAT.test(id));
+  const ids = (DISCOVERED[provider] || []).filter(isChatId);
   const values = ids.map((id) => `${provider}:${id}`);
   if (current && !values.includes(current)) values.unshift(current);
   node.innerHTML = "";
@@ -1816,6 +1877,20 @@ function fillModelSelect(sel, current, provider, customSel) {
   node.appendChild(new Option("Custom…", CUSTOM_MODEL));
   node.value = current || values[0] || "";
   if (customSel) syncCustomModel(sel, customSel);
+}
+
+/* Under each stage: the selected OmniRoute combo's fallback order, as
+   OmniRoute reported it at the last Refresh. Hidden for anything else. */
+function syncComboHints() {
+  [["#setGatekeeper", "#setGatekeeperCustom", "#setGatekeeperCombo"],
+   ["#setEditor", "#setEditorCustom", "#setEditorCombo"]]
+    .forEach(([sel, custom, hintSel]) => {
+      const hint = $(hintSel);
+      if (!hint) return;
+      const text = comboChainText(modelValue(sel, custom));
+      hint.textContent = text;
+      hint.hidden = !text;
+    });
 }
 
 /* Show the free-text id box only while its dropdown is on "Custom…". */
@@ -1851,7 +1926,7 @@ function stageProvider(selectSel, customSel) {
 // deliberately no hardcoded per-vendor list, so a suggestion is never stale
 // against what the key can actually see today.
 function siblingModels(provider, excludeFull) {
-  const ids = (DISCOVERED[provider] || []).filter((id) => id && !NON_CHAT.test(id));
+  const ids = (DISCOVERED[provider] || []).filter(isChatId);
   return ids
     .map((id) => `${provider}:${id}`)
     .filter((full) => full !== excludeFull);
@@ -1914,6 +1989,7 @@ function fillSettings() {
   autoSuggestChain("gatekeeper", "#setGatekeeper", "#setGatekeeperCustom",
                    "#setGatekeeperChain");
   autoSuggestChain("editor", "#setEditor", "#setEditorCustom", "#setEditorChain");
+  syncComboHints();
 }
 
 async function refreshModels() {
@@ -1927,7 +2003,7 @@ async function refreshModels() {
   hint.textContent = "Listing models…";
   try {
     DISCOVERED[provider] = await PROVIDERS[provider].discover(key);
-    const usable = DISCOVERED[provider].filter((id) => !NON_CHAT.test(id));
+    const usable = DISCOVERED[provider].filter(isChatId);
     hint.textContent = `${usable.length} usable models for this ` +
                        `${PROVIDERS[provider].label} key.`;
     fillModelSelect("#setGatekeeper", el("#setGatekeeper").value, provider,
@@ -1939,6 +2015,7 @@ async function refreshModels() {
     autoSuggestChain("gatekeeper", "#setGatekeeper", "#setGatekeeperCustom",
                      "#setGatekeeperChain");
     autoSuggestChain("editor", "#setEditor", "#setEditorCustom", "#setEditorChain");
+    syncComboHints();
   } catch (e) {
     // A browser-side list can fail on CORS even with a perfectly good key —
     // several of these vendors send no CORS headers on /models. Say so, and
@@ -1974,6 +2051,54 @@ async function testKeys() {
     } catch (e) {
       line.dataset.state = "bad";
       line.textContent = `${p.label}: ${e.message}`;
+      continue;
+    }
+    if (id === "omniroute") {
+      await testOmnirouteStages(key, out);
+      syncComboHints();
+    }
+  }
+}
+
+/* Listing proves the key; it does not prove the combo answers. So for each
+   stage set to an OmniRoute id, send ONE tiny completion and report who
+   actually answered. X-OmniRoute-Decision / -Fallback-Attempts are read when
+   the proxy exposes them; the response's `model` field is the fallback. */
+async function testOmnirouteStages(key, out) {
+  const stages = [["Gatekeeper", "#setGatekeeper", "#setGatekeeperCustom"],
+                  ["Editor", "#setEditor", "#setEditorCustom"]];
+  const tested = new Set();
+  for (const [label, sel, custom] of stages) {
+    const full = modelValue(sel, custom) || "";
+    if (!full.startsWith("omniroute:") || tested.has(full)) continue;
+    tested.add(full);
+    const model = full.slice("omniroute:".length);
+    const line = document.createElement("div");
+    line.className = "set__result";
+    line.dataset.state = "wait";
+    line.textContent = `${label} ${model}: sending a test request…`;
+    out.appendChild(line);
+    try {
+      const r = await fetch(`${OMNIROUTE_BASE}/chat/completions`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`,
+                   "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model, max_tokens: 16,
+          messages: [{ role: "user", content: "Reply with the single word OK." }],
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
+      const decision = r.headers.get("x-omniroute-decision");
+      const hops = r.headers.get("x-omniroute-fallback-attempts");
+      line.dataset.state = "ok";
+      line.textContent = `${label} ${model}: answered by ${j.model || "?"}` +
+        (decision ? ` (${decision})` : "") +
+        (hops ? ` after ${hops} fallback attempt(s)` : "");
+    } catch (e) {
+      line.dataset.state = "bad";
+      line.textContent = `${label} ${model}: ${e.message}`;
     }
   }
 }
@@ -2038,10 +2163,14 @@ function wireSettings() {
       on(sel, "change", () => {
         syncCustomModel(sel, custom);
         autoSuggestChain(stage, sel, custom, chain);
+        syncComboHints();
       });
       // Typing a custom id is also a model change, just via a text field
       // instead of a select — the "input" event covers keystrokes.
-      on(custom, "input", () => autoSuggestChain(stage, sel, custom, chain));
+      on(custom, "input", () => {
+        autoSuggestChain(stage, sel, custom, chain);
+        syncComboHints();
+      });
     });
 
   on("#saveSettings", "click", async () => {

@@ -127,6 +127,15 @@ _COMPAT = {
     "huggingface": {"label": "Hugging Face",
                     "base": "https://router.huggingface.co/v1",
                     "keys_url": "https://huggingface.co/settings/tokens"},
+    # Self-hosted router on ks2, published through the omni.kalistamp.lol proxy
+    # (docs/script.js OMNIROUTE_BASE must match). A model id here is usually a
+    # COMBO name: OmniRoute walks that combo's own fallback chain, so this
+    # module sees one model and only falls back further if the whole combo fails.
+    "omniroute":   {"label": "OmniRoute",
+                    "base": os.environ.get(
+                        "OMNIROUTE_BASE_URL",
+                        "https://omni.kalistamp.lol/v1").rstrip("/"),
+                    "keys_url": "the OmniRoute dashboard (API Keys)"},
 }
 
 PROVIDERS = (OPENAI, ANTHROPIC, GEMINI) + tuple(_COMPAT)
@@ -1178,6 +1187,14 @@ def _compat_text(provider: str, model: str, system_prompt: str,
             f"{detail}", resp.status_code)
     else:
         raise _CompatError(f"{provider_label(provider)}: exhausted corrections")
+
+    # An OmniRoute combo that fell back still answers 200, so without this the
+    # run log could not tell a healthy first choice from a chain limping along.
+    headers = getattr(resp, "headers", None) or {}
+    hops = headers.get("X-OmniRoute-Fallback-Attempts")
+    if provider == "omniroute" and hops and hops != "0":
+        _event(f"{cache_key}: combo fell back {hops}x — "
+               f"{headers.get('X-OmniRoute-Decision') or 'no decision header'}")
 
     data = resp.json()
     choices = data.get("choices") or []
