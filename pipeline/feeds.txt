@@ -15,10 +15,10 @@
 # expected. Only CAPTCHA / 4xx / 5xx / DNS / NO_FEED are real problems. Never
 # prune a feed for being STALE — that is exactly when its next post matters.
 #
-# Current count: 248 active sources.  206 + 42 (scam source list, 2026-11-05).
+# Current count: 250 active sources.  206 + 42 + 2 (scam source lists, 2026-11-05).
 # 199 + 7 earlier (Reddit moved from .rss feeds to old.reddit HTML listings,
 # one line per subreddit, 2026-08-14).
-# 92 of the 248 feed the "Scams & Fraud" section, 11 of those from Reddit.
+# 94 of the 250 feed the "Scams & Fraud" section, 11 of those from Reddit.
 # Reddit is scoped to scam subreddits only; see the Reddit block below.
 # Pruning method: 3 confirmation passes + a browser-UA retest, so only PERSISTENT
 # hard failures were cut. Transients (Reddit 429/403) were deliberately kept.
@@ -274,6 +274,8 @@ https://news.google.com/rss/search?q=%22elder+fraud%22+when:7d&hl=en-US&gl=US&ce
 https://news.google.com/rss/search?q=%22attorney+general%22+%22consumer+alert%22+scam+when:7d&hl=en-US&gl=US&ceid=US:en
 https://news.google.com/rss/search?q=sheriff+scam+warning+when:1d&hl=en-US&gl=US&ceid=US:en
 https://news.google.com/rss/search?q=smishing+OR+%22text+scam%22+when:7d&hl=en-US&gl=US&ceid=US:en
+https://endscamsproject.com/latest-scams/feed.xml   # resolved from /latest-scams
+https://alerts.consumershielddaily.com/feed.xml   # resolved from alerts.consumershielddaily.com/
 
 # -- Government / law-enforcement fraud alerts (low cadence, high authority) --
 https://www.scamwatch.gov.au/rss/news-feed.xml
@@ -472,3 +474,5 @@ https://www.threatfabric.com/blogs/rss.xml
 # snopes.com rating/scam/feed ignores the rating filter (general fact-checks)
 # idtheftcenter.org/feed/ carries site pages, not the alerts | feeds.finra.org
 #   FINRAInvestorAlerts undated, old items | garwarner.blogspot.com silent since 2026-02
+# news_list.txt (2026-11-05): 353 further URLs checked, 2 added above. The rest
+#   were duplicates, non-US, HTML-only/blocked, outdated, or general news/vendor blogs
