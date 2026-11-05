@@ -15,9 +15,10 @@
 # expected. Only CAPTCHA / 4xx / 5xx / DNS / NO_FEED are real problems. Never
 # prune a feed for being STALE — that is exactly when its next post matters.
 #
-# Current count: 206 active sources.  199 + 7 (Reddit moved from .rss feeds to
-# old.reddit HTML listings, one line per subreddit, 2026-08-14).
-# 63 of the 206 feed the "Scams & Fraud" section, 11 of those from Reddit.
+# Current count: 248 active sources.  206 + 42 (scam source list, 2026-11-05).
+# 199 + 7 earlier (Reddit moved from .rss feeds to old.reddit HTML listings,
+# one line per subreddit, 2026-08-14).
+# 92 of the 248 feed the "Scams & Fraud" section, 11 of those from Reddit.
 # Reddit is scoped to scam subreddits only; see the Reddit block below.
 # Pruning method: 3 confirmation passes + a browser-UA retest, so only PERSISTENT
 # hard failures were cut. Transients (Reddit 429/403) were deliberately kept.
@@ -65,7 +66,7 @@ https://www.nist.gov/blogs/cybersecurity-insights/rss.xml
 https://www.cyber.gov.au/rss/news
 # https://www.cyber.gc.ca/api/cccs/rss/v1/en   # removed 2026-07-25: HTTP 400, endpoint rejects our request
 https://www.cisa.gov/cybersecurity-advisories/all.xml
-# https://www.microsoft.com/en-us/security/blog/feed/   # removed 2026-07-25: CAPTCHA/JS interstitial, bot-blocked
+https://www.microsoft.com/en-us/security/blog/feed/
 https://blog.talosintelligence.com/rss/
 https://unit42.paloaltonetworks.com/feed/
 https://securelist.com/feed/
@@ -107,6 +108,17 @@ https://www.lastwatchdog.com/feed/
 https://www.huntress.com/blog/rss.xml
 # https://cybersecurity.att.com/blogs/rss   # removed 2026-08-13: HTTP 503/403. AT&T Cybersecurity rebranded to LevelBlue; all 4 levelblue.com feed paths 404
 https://www.seqrite.com/blog/feed/
+https://cyberscoop.com/feed/
+https://therecord.media/news/cybercrime/feed
+https://www.wired.com/feed/category/security/latest/rss
+https://arstechnica.com/security/feed/
+https://feeds.feedburner.com/TheHackersNews
+https://www.helpnetsecurity.com/feed/
+https://www.infosecurity-magazine.com/rss/news/
+https://grahamcluley.com/feed/
+https://research.checkpoint.com/feed/
+https://www.sophos.com/en-us/category/threat-research/feed
+https://cloudblog.withgoogle.com/topics/threat-intelligence/rss/
 # https://www.stealthmole.com/resources/intelligence-hub   # removed 2026-08-13: never was a feed URL (HTML page); /blog/rss.xml, /rss.xml, /feed all 404
 
 # --- Best-guess by convention (?) — watch the NO FEED log for these ---
@@ -222,6 +234,7 @@ https://www.schneier.com/feed/
 https://www.twz.com/feed
 https://www.bellingcat.com/feed/
 https://www.occrp.org/en/feed   # (?) best-guess; was https://www.occrp.org/en
+https://www.occrp.org/en/investigations/feed
 https://www.scmp.com/rss/91/feed
 https://www.clubic.com/feed/news.rss
 
@@ -250,6 +263,17 @@ https://gacs.app/rss.xml
 https://blog.knowbe4.com/rss.xml   # resolved from /feed/ (Scam of the Week)
 https://nypost.com/tag/scams/feed/
 https://www.theguardian.com/money/series/scam-watch/rss
+https://news.google.com/rss/search?q=scam+alert+when:1d&hl=en-US&gl=US&ceid=US:en
+https://news.google.com/rss/search?q=%22pig+butchering%22+when:7d&hl=en-US&gl=US&ceid=US:en
+https://news.google.com/rss/search?q=%22romance+scam%22+when:7d&hl=en-US&gl=US&ceid=US:en
+https://news.google.com/rss/search?q=%22tech+support+scam%22+when:7d&hl=en-US&gl=US&ceid=US:en
+https://news.google.com/rss/search?q=%22crypto+scam%22+when:1d&hl=en-US&gl=US&ceid=US:en
+https://news.google.com/rss/search?q=%22investment+scam%22+when:7d&hl=en-US&gl=US&ceid=US:en
+https://news.google.com/rss/search?q=%22impersonation+scam%22+when:7d&hl=en-US&gl=US&ceid=US:en
+https://news.google.com/rss/search?q=%22elder+fraud%22+when:7d&hl=en-US&gl=US&ceid=US:en
+https://news.google.com/rss/search?q=%22attorney+general%22+%22consumer+alert%22+scam+when:7d&hl=en-US&gl=US&ceid=US:en
+https://news.google.com/rss/search?q=sheriff+scam+warning+when:1d&hl=en-US&gl=US&ceid=US:en
+https://news.google.com/rss/search?q=smishing+OR+%22text+scam%22+when:7d&hl=en-US&gl=US&ceid=US:en
 
 # -- Government / law-enforcement fraud alerts (low cadence, high authority) --
 https://www.scamwatch.gov.au/rss/news-feed.xml
@@ -257,6 +281,9 @@ https://www.ic3.gov/CSA/RSS   # working IC3 endpoint; www.ic3.gov itself is CAPT
 https://www.cftc.gov/RSS/RSSGP/rssgp.xml
 https://www.sec.gov/news/pressreleases.rss
 https://www.fbi.gov/feeds/national-press-releases/rss.xml
+https://www.ic3.gov/PSA/rss
+https://www.fbi.gov/wanted/most-wanted-fraudsters/RSS   # resolved from /wanted/most-wanted-fraudsters
+https://www.atg.wa.gov/news/news-releases/consumer-alert-rss
 
 # -- Anti-fraud / awareness orgs --
 https://takefive-stopfraud.org.uk/feed/
@@ -264,6 +291,13 @@ https://www.getsafeonline.org/feed/
 https://about-fraud.com/feed
 https://sequenceinc.com/fraudfiles/feed
 https://www.fraudsmart.ie/feed/
+https://fraud.org/feed/                    # resolved from https://fraud.org/
+https://smpresource.org/feed/
+https://frankonfraud.com/feed/             # resolved from https://frankonfraud.com/
+https://www.acfe.com/shared-content/rss-feeds/acfe-insights-blog-rss-feed
+http://fraudoftheday.com/feed/             # http on purpose: https fails TLS
+https://www.corporatecrimereporter.com/feed/
+https://feeds.feedburner.com/MortgageFraudBlog
 
 # -- Reddit: victim reports, potentially the highest-volume scam source -------
 # Every subreddit below was individually verified alive on 2026-08-13 (article
@@ -331,6 +365,8 @@ https://www.justice.gov/news/rss          # DOJ fraud indictments and prosecutio
 https://www.cfpb.gov/about-us/newsroom/feed/
 https://oig.ssa.gov/feed.xml              # resolved from /rss/ — SSA imposter scams
 https://www.nasaa.org/feed/               # state securities regulators
+https://www.justice.gov/news/rss?type%5B0%5D=blog_post&type%5B1%5D=image_gallery&type%5B2%5D=press_release&type%5B3%5D=youtube_video&field_topic%5B0%5D=34046&field_topic%5B1%5D=3926&field_topic%5B2%5D=3951&field_topic%5B3%5D=25351&field_topic%5B4%5D=54326&field_topic%5B5%5D=54331&field_topic%5B6%5D=40971&field_topic%5B7%5D=3936&field_date=2026-04-01&search_api_language=en&show_public_archived=0&require_all=0
+https://www.finra.org/media-center/newsreleases/rss
 
 # -- Crypto & investment fraud --
 https://www.chainalysis.com/blog/feed/
@@ -361,6 +397,11 @@ https://www.databreaches.net/feed/
 https://www.merchantfraudjournal.com/feed/
 https://www.chargebackgurus.com/blog/rss.xml
 https://sift.com/blog/feed
+https://www.americanbanker.com/tag/fraud.rss
+https://bankingjournal.aba.com/tag/fraud/feed/
+https://www.pymnts.com/category/cybersecurity/fraud-prevention/feed/
+https://verafin.com/blog/feed/
+https://www.biocatch.com/blog/rss.xml
 
 # -- Phishing & fraud research (vendor labs, judged on merit by the gatekeeper) --
 https://www.group-ib.com/blog/rss.xml
@@ -371,6 +412,7 @@ https://www.bitdefender.com/blog/api/rss/labs/
 https://www.tripwire.com/state-of-security/feed
 https://blog.avira.com/feed/
 https://www.iddataweb.com/feed/
+https://www.threatfabric.com/blogs/rss.xml
 
 # -- Verified UNUSABLE 2026-08-12 — left here so they are never re-added blind --
 # All of the following were checked with the pipeline's own fetcher and returned
@@ -413,3 +455,20 @@ https://www.iddataweb.com/feed/
 # www.consumeraffairs.com CAPTCHA | gasa.org 404 | globalantiscam.org 404
 # www.finra.org 404 | www.fincen.gov 404 | ico.org.uk 404 | www.hhs.gov 403
 # treasury.gov OFAC NO_FEED | www.certik.com 404 | www.elliptic.co 404
+#
+# -- Scam source list tested 2026-11-05 and rejected (no usable feed) --
+# consumer.ftc.gov/blog/gd-rss.xml 403 | ftc.gov/feeds/data-spotlight.xml 403
+# sec.gov/rss/investor/alerts 403 | sec.gov litigation-releases/rss 403
+# cisa.gov/news.xml 403 | blog.ssa.gov fraud feed 403 | fcc.gov 403 | michigan.gov 403
+# bbb.org (news + scamtracker) CAPTCHA | iowafraudfighters.gov CONN_ERROR
+# consumerfinance.gov/about-us/blog/feed/ EMPTY | insurancefraud.org/feed/ EMPTY
+# attorneygeneral.gov/consumer-alerts 404 | elliptic.co/blog/rss.xml 404
+# NO_FEED (HTML only): oig.ssa.gov/scam-alerts | oig.hhs.gov consumer-alerts + enforcement
+#   uspis.gov/news | irs.gov/newsroom | finra.org/investors/insights | dfpi.ca.gov
+#   crypto-scam-tracker | oag.ca.gov/consumers/alerts | myfloridalegal.com | aarp.org
+#   nicb.org | staysafeonline.org | gasa.org | scamadviser.com | feedzai.com/blog
+# justice.gov/feeds/justice-news.xml?... (12 legacy filtered URLs) ignore their
+#   filters and return the same items as justice.gov/news/rss above
+# snopes.com rating/scam/feed ignores the rating filter (general fact-checks)
+# idtheftcenter.org/feed/ carries site pages, not the alerts | feeds.finra.org
+#   FINRAInvestorAlerts undated, old items | garwarner.blogspot.com silent since 2026-02
