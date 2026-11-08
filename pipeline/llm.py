@@ -342,6 +342,7 @@ _INTERVAL_DEFAULTS = {
     "mistral": "1",
     "cohere": "3",       # trial keys are the tightest of the set
     "huggingface": "2",
+    "omniroute": "1",    # self-hosted router; the combo behind it sets the real limit
 }
 LLM_MIN_INTERVAL = os.environ.get("LLM_MIN_INTERVAL")
 _INTERVALS = {

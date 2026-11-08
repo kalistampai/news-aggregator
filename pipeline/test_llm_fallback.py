@@ -940,3 +940,9 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def test_every_provider_has_a_throttle_interval():
+    """A provider missing from _INTERVAL_DEFAULTS crashes llm import (and the daily run)."""
+    assert set(llm.PROVIDERS) <= set(llm._INTERVAL_DEFAULTS)
+    assert set(llm.PROVIDERS) <= set(llm._INTERVALS)
