@@ -106,6 +106,20 @@ def test_empty_scoring_error_exists():
     assert issubclass(gatekeeper.EmptyScoringError, RuntimeError)
 
 
+def test_string_scores_coerced_and_sortable():
+    # 2026-11-11 regression: the model answered "8" (str) beside 5 (int) in
+    # one tier, and features.sort() raised TypeError. Coercion must fix it.
+    assert gatekeeper._coerce_score("8") == 8.0
+    assert gatekeeper._coerce_score(" 7.5 ") == 7.5
+    assert gatekeeper._coerce_score(5) == 5.0
+    assert gatekeeper._coerce_score(None) == 0.0
+    assert gatekeeper._coerce_score("high") == 0.0
+    assert gatekeeper._coerce_score(True) == 0.0
+    mixed = [{"score": gatekeeper._coerce_score(s)} for s in ("8", 5, "10")]
+    mixed.sort(key=lambda a: a["score"], reverse=True)
+    assert [a["score"] for a in mixed] == [10.0, 8.0, 5.0], mixed
+
+
 def main() -> int:
     import types as _t
     tests = [v for k, v in sorted(globals().items())

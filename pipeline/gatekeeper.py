@@ -60,6 +60,21 @@ class EmptyScoringError(RuntimeError):
     """Scoring produced nothing publishable — abort before overwriting the row."""
 
 
+def _coerce_score(value) -> float:
+    """Turn a model's score into a number, whatever JSON type it used.
+
+    The model sometimes answers "8" instead of 8. Mixing str and int scores in
+    one tier made features.sort() raise TypeError and killed the 11/11 run.
+    Anything unparseable becomes 0, so it is rejected rather than crashing.
+    """
+    if isinstance(value, bool):          # bool is an int subclass; not a score
+        return 0.0
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def _batched(seq, n):
     for i in range(0, len(seq), n):
         yield seq[i:i + n]
@@ -179,8 +194,8 @@ def main() -> None:
                 continue
             matched += 1
             scored.append({**src,
-                           "score": v.get("score", 0),
-                           "tier": v.get("tier", "reject"),
+                           "score": _coerce_score(v.get("score")),
+                           "tier": str(v.get("tier") or "reject").strip().lower(),
                            "gatekeeper_reasoning": v.get("reasoning", "")})
 
         print(f"[gatekeeper] batch {n}/{len(batches)}: "
